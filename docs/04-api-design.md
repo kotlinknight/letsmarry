@@ -1,0 +1,713 @@
+# Make My Marriage — REST API Design
+
+**Status:** MVP endpoint contract baseline  
+**Version:** 1.0  
+**Last consolidated:** 2026-10-10  
+**Base path:** `/api/v1`  
+**Backend:** Spring Boot + Spring Security  
+**Frontend:** Angular + generated/typed OpenAPI client  
+**Format:** JSON, RFC 9457 Problem Details for errors
+
+> This is an API **design document**, not yet a machine-readable OpenAPI YAML file or a deployed Swagger endpoint. Endpoints and sample DTOs should be formalized in `docs/api/openapi.yaml` before controller implementation.
+
+## 1. API principles
+
+1. Resource-oriented REST; plural, lowercase, kebab-case path segments.
+2. Wedding-scoped endpoints carry `/weddings/{weddingId}`.
+3. No cross-wedding access: verify membership, permission **and** resource ownership.
+4. Separate `/public` guest/website endpoints with minimum necessary data.
+5. Stable request/response DTOs; never serialize JPA entities directly.
+6. Version breaking changes in URL (`/api/v1`, later `/api/v2`).
+7. `GET` paginated for potentially large collections; explicit filtering/search/sorting.
+8. Domain commands such as `complete`, `publish` or `resend` may use `POST`.
+9. `PATCH` for partial updates; absent fields unchanged, explicit `null` clears when allowed.
+10. Idempotency for money or invitation commands with significant side effects.
+11. Conditional updates with `ETag`/`If-Match` where concurrent edits matter.
+12. Use OpenAPI to validate/generate Angular client types.
+
+## 2. Base URLs and conventions
+
+| Environment | Example |
+|---|---|
+| Local | `http://localhost:8080/api/v1` |
+| Staging | `https://api-staging.makemymarriage.com/api/v1` (illustrative) |
+| Production | `https://api.makemymarriage.com/api/v1` (illustrative) |
+
+JSON requests send `Content-Type: application/json`, responses `application/json`, errors `application/problem+json`.
+
+**IDs:** UUIDv7 serialized as strings.  
+**Calendar date:** `YYYY-MM-DD`.  
+**Timestamp:** ISO-8601 with offset; store instants consistently.  
+**Timezone:** IANA name, e.g. `Asia/Kolkata`.  
+**Enums:** uppercase snake-case, e.g. `IN_PROGRESS`.  
+**Monetary values:** decimal strings and explicit currency:
+
+```json
+{ "amount": "150000.00", "currency": "INR" }
+```
+
+## 3. Authentication and tokens
+
+### Private planner endpoints
+
+```http
+Authorization: Bearer <short-lived-access-token>
+```
+
+- Access JWT remains in Angular memory, not localStorage.
+- Refresh credential is a rotating secure HttpOnly cookie, with Redis-backed server-side state.
+- Protected refresh/logout endpoints use appropriate cookie `SameSite`, Origin and CSRF controls based on topology.
+- Angular coordinates a **single** refresh attempt if concurrent calls expire; retry original calls once.
+- Auth implementation is **provisional** pending final JWT vs Spring Session ADR; keep API surface adaptable.
+
+### Guest invitations
+
+- A guest receives a high-entropy invitation token in the link `/i/:token`.
+- Angular calls `POST /public/invitations/exchange` with that secret in the JSON **body**.
+- API returns a short-lived narrowly scoped guest bearer token; it does **not** create a user account.
+- Guest bearer token can only read the associated invitation and submit approved event-level RSVPs.
+- Invitation secret is not logged or preserved in referrers/analytics.
+
+## 4. Authentication endpoint catalog
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/auth/register` | Register account |
+| POST | `/auth/login` | Login; establish refresh cookie |
+| POST | `/auth/refresh` | Rotate refresh session; issue new access token |
+| POST | `/auth/logout` | Revoke refresh session, clear cookie |
+| POST | `/auth/email/verify` | Verify email using secure token |
+| POST | `/auth/password/forgot` | Request password reset; non-enumerating response |
+| POST | `/auth/password/reset` | Reset with valid token |
+| GET | `/users/me` | Current account profile |
+
+Example register:
+
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
+
+{"displayName":"Anjali","email":"anjali@example.com","password":"..."}
+```
+
+Response `201 Created`:
+
+```json
+{
+  "id": "<uuid>",
+  "displayName": "Anjali",
+  "email": "anjali@example.com",
+  "emailVerified": false
+}
+```
+
+Example login response:
+
+```json
+{
+  "accessToken": "<jwt>",
+  "expiresIn": 900,
+  "user": { "id": "<uuid>", "displayName": "Anjali", "email": "anjali@example.com" }
+}
+```
+
+Refresh returns `{ "accessToken": "<jwt>", "expiresIn": 900 }`; logout returns `204 No Content`. Never return refresh credentials in JSON.
+
+## 5. HTTP responses and errors
+
+| Code | Meaning |
+|---|---|
+| 200 | Successful read/update |
+| 201 | New resource (prefer `Location` header) |
+| 202 | Async operation accepted |
+| 204 | Successful no-body operation |
+| 400 | Malformed request or input structure |
+| 401 | No/invalid authentication |
+| 403 | Authenticated but forbidden |
+| 404 | Missing or undisclosable resource |
+| 409 | Business state/conflict (e.g. owner slot taken) |
+| 412 | `If-Match` precondition failed |
+| 422 | Valid JSON, invalid business input |
+| 429 | Rate limited; `Retry-After` header |
+| 500 | Unexpected internal error |
+| 503 | Temporary dependency unavailable |
+
+Use RFC 9457 Problem Details and extension fields:
+
+```json
+{
+  "type": "https://api.makemymarriage.com/problems/validation-error",
+  "title": "Validation failed",
+  "status": 422,
+  "detail": "One or more fields are invalid.",
+  "instance": "/api/v1/weddings",
+  "code": "VALIDATION_ERROR",
+  "correlationId": "c5ed...",
+  "errors": [
+    {"field":"primaryWeddingDate", "code":"INVALID_DATE", "message":"Enter a valid wedding date."}
+  ]
+}
+```
+
+Client logic should depend on stable `code` values, not natural-language `detail` text. Responses should return `X-Correlation-ID` and redact secret values from server logs.
+
+## 6. Collection semantics
+
+```http
+GET /api/v1/weddings/{weddingId}/guests?page=0&size=25&sort=fullName,asc&q=rahul
+```
+
+Default `page` is 0; recommended maximum `size` is 100. Sorting must be whitelisted.
+
+```json
+{
+  "items": [],
+  "page": { "number": 0, "size": 25, "totalElements": 327, "totalPages": 14 }
+}
+```
+
+Use `q` for full-text/fuzzy search where supported. Avoid generic SQL-like user-provided filter expressions.
+
+## 7. Concurrency and idempotency
+
+Versioned GET/PATCH responses can use:
+
+```http
+ETag: "12"
+```
+
+Client update:
+
+```http
+PATCH /api/v1/weddings/{weddingId}/expenses/{expenseId}
+If-Match: "12"
+```
+
+If modified, return `412` with `RESOURCE_MODIFIED`. For important non-idempotent commands:
+
+```http
+Idempotency-Key: <client-generated-uuid>
+```
+
+Server must scope the key to user/wedding/endpoint, compare request hash, atomically lock or persist a result, and reject reuse with a conflicting payload. Payment recording especially requires durable/concurrency-safe deduplication.
+
+## 8. Weddings and couple ownership
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/weddings` | List current user's memberships/weddings |
+| POST | `/weddings` | Create wedding and creator membership |
+| GET | `/weddings/{weddingId}` | Read wedding |
+| PATCH | `/weddings/{weddingId}` | Update wedding settings |
+| POST | `/weddings/{weddingId}/complete` | Mark wedding completed |
+| POST | `/weddings/{weddingId}/archive` | Archive wedding |
+| GET | `/weddings/{weddingId}/couple` | Read bride/groom profiles and claim status |
+| PATCH | `/weddings/{weddingId}/couple/{coupleRole}` | Edit couple profile |
+| GET | `/weddings/{weddingId}/dashboard` | Permission-filtered aggregate summary |
+
+Create wedding example:
+
+```http
+POST /api/v1/weddings
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Arjun & Anjali Wedding",
+  "primaryWeddingDate": "2027-02-15",
+  "timezone": "Asia/Kolkata",
+  "primaryLocation": "Thiruvananthapuram, Kerala",
+  "creatorRelationship": "BRIDE",
+  "couple": {
+    "bride": { "displayName": "Anjali" },
+    "groom": { "displayName": "Arjun" }
+  }
+}
+```
+
+`creatorRelationship`: `BRIDE`, `GROOM`, `FAMILY_MEMBER`, `FRIEND`.
+
+**Create rules:**
+
+- BRIDE/GROOM → corresponding owner role on creation.
+- FAMILY_MEMBER/FRIEND → setup `ADMIN` and empty owner slots.
+- Create two couple profiles even if account(s) are unlinked.
+- Return `201 Created`, `Location: /api/v1/weddings/{id}`, and wedding/creator-membership summary.
+- Partner owner invitations may be created during a separate optional step, before/after first dashboard access.
+
+Example dashboard:
+
+```json
+{
+  "countdown": { "weddingDate": "2027-02-15", "daysRemaining": 128 },
+  "tasks": { "total": 74, "completed": 42, "overdue": 5 },
+  "guests": { "invited": 412, "attending": 289, "declined": 31, "maybe": 7, "awaitingResponse": 85 },
+  "finance": {
+    "visible": true,
+    "budget": {"amount":"1800000.00","currency":"INR"},
+    "committed": {"amount":"1240000.00","currency":"INR"},
+    "paid": {"amount":"970000.00","currency":"INR"}
+  },
+  "upcomingEvents": [],
+  "upcomingTasks": [],
+  "upcomingPayments": []
+}
+```
+
+**Finance visibility:** if member cannot view finance, omit its figures and return `finance: {"visible":false}` (or omit object entirely; choose one OpenAPI contract and test it). Financial activity cannot appear in unauthorized summary lists.
+
+## 9. Membership and permissions
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/weddings/{weddingId}/members` | List members |
+| GET | `/weddings/{weddingId}/members/{memberId}` | Read member |
+| PATCH | `/weddings/{weddingId}/members/{memberId}` | Update eligible role/status |
+| DELETE | `/weddings/{weddingId}/members/{memberId}` | Remove eligible non-owner |
+| GET | `/permissions` | Global capability catalog |
+| GET | `/weddings/{weddingId}/members/{memberId}/permissions` | Effective permissions |
+| PUT | `/weddings/{weddingId}/members/{memberId}/permission-overrides` | Replace explicit overrides |
+| POST | `/weddings/{weddingId}/member-invitations` | Invite member/owner |
+| GET | `/weddings/{weddingId}/member-invitations` | List invitations |
+| POST | `/weddings/{weddingId}/member-invitations/{id}/resend` | Resend pending invite |
+| DELETE | `/weddings/{weddingId}/member-invitations/{id}` | Cancel pending invite |
+| POST | `/member-invitations/accept` | Accept token as authenticated intended user |
+
+Sample owner invitation:
+
+```json
+{ "email": "arjun@example.com", "targetRole": "OWNER", "coupleRole": "GROOM" }
+```
+
+Sample family invitation:
+
+```json
+{ "email": "priya@example.com", "targetRole": "FAMILY_MEMBER" }
+```
+
+Acceptance:
+
+```http
+POST /api/v1/member-invitations/accept
+Authorization: Bearer <access-token>
+Content-Type: application/json
+
+{"token":"<raw-member-invitation-token>"}
+```
+
+Acceptance verifies hash, expiry, email ownership and target role/slot, links couple profile where applicable, creates active membership and marks invitation used atomically. Unauthorized people cannot assign themselves OWNER or demote an owner via normal member APIs.
+
+## 10. Events
+
+| Method | Path |
+|---|---|
+| GET | `/weddings/{weddingId}/events` |
+| POST | `/weddings/{weddingId}/events` |
+| GET | `/weddings/{weddingId}/events/{eventId}` |
+| PATCH | `/weddings/{weddingId}/events/{eventId}` |
+| DELETE | `/weddings/{weddingId}/events/{eventId}` |
+
+Example POST:
+
+```json
+{
+  "name": "Wedding Ceremony",
+  "description": "Main ceremony",
+  "startsAt": "2027-02-15T10:30:00+05:30",
+  "endsAt": "2027-02-15T12:00:00+05:30",
+  "timezone": "Asia/Kolkata",
+  "venueName": "Example Convention Centre",
+  "venueAddress": "Thiruvananthapuram, Kerala",
+  "dressCode": "Traditional",
+  "publishOnWebsite": true
+}
+```
+
+Permissions: `MANAGE_EVENTS` for mutating; active wedding membership for appropriate read. DELETE usually soft-deletes and must handle dependent assignments intentionally.
+
+## 11. Tasks
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/weddings/{weddingId}/tasks` | Filters: status, priority, assigneeId, eventId, dueBefore, dueAfter, q |
+| POST | `/weddings/{weddingId}/tasks` | Create task |
+| GET | `/weddings/{weddingId}/tasks/{taskId}` | Read, if visible |
+| PATCH | `/weddings/{weddingId}/tasks/{taskId}` | Update |
+| DELETE | `/weddings/{weddingId}/tasks/{taskId}` | Soft delete |
+| POST | `/weddings/{weddingId}/tasks/{taskId}/complete` | Mark completed |
+| POST | `/weddings/{weddingId}/tasks/{taskId}/reopen` | Reopen task |
+
+Example:
+
+```json
+{
+  "title": "Finalize photographer",
+  "description": "Confirm package and dates.",
+  "eventId": "<uuid>",
+  "priority": "HIGH",
+  "dueAt": "2027-01-15T18:00:00+05:30",
+  "assigneeIds": ["<member-uuid>"],
+  "visibility": "SELECTED_MEMBERS",
+  "visibleMemberIds": ["<member-uuid>"]
+}
+```
+
+`GET /tasks?assignedTo=me` is an additional convenience filter. Private tasks must not leak in list counts/activity.
+
+## 12. Households, guests and event assignment
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET, POST | `/weddings/{weddingId}/households` | List/create households |
+| PATCH, DELETE | `/weddings/{weddingId}/households/{householdId}` | Update/remove |
+| GET, POST | `/weddings/{weddingId}/guests` | List/create guests |
+| GET, PATCH, DELETE | `/weddings/{weddingId}/guests/{guestId}` | Read/update/remove |
+| GET | `/weddings/{weddingId}/events/{eventId}/guests` | Event guest list |
+| POST | `/weddings/{weddingId}/events/{eventId}/guest-assignments` | Add guest(s) to event |
+| DELETE | `/weddings/{weddingId}/events/{eventId}/guest-assignments/{guestId}` | Remove assignment |
+
+Example guest:
+
+```json
+{
+  "fullName": "Rahul Sharma",
+  "email": "rahul@example.com",
+  "phone": "+919876543210",
+  "householdId": "<uuid>",
+  "side": "GROOM",
+  "relationship": "College Friend"
+}
+```
+
+Example event assignment:
+
+```json
+{ "guestIds": ["<uuid-1>","<uuid-2>"] }
+```
+
+Guest filters: `q`, `side`, `householdId`, `eventId`, `rsvpStatus`. Bulk assignment must be idempotent for guests already assigned and reject cross-wedding IDs.
+
+## 13. Guest invitation and RSVP
+
+### Organizer endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/weddings/{weddingId}/guest-invitations` | Create tokenized invitation for guest IDs |
+| GET | `/weddings/{weddingId}/guest-invitations` | List invitations (safe DTO, never raw token) |
+| POST | `/weddings/{weddingId}/guest-invitations/{invitationId}/send` | Queue invitation email; `202` |
+| DELETE | `/weddings/{weddingId}/guest-invitations/{invitationId}` | Revoke invitation |
+| GET | `/weddings/{weddingId}/rsvps/summary?eventId=...` | Internal RSVP summary |
+
+Example invitation create:
+
+```json
+{ "guestIds": ["<uuid-1>","<uuid-2>"] }
+```
+
+Creation response may return one-time `shareUrl` to authorized organizer. **Never subsequently reveal the raw token** from ordinary list APIs; if regeneration is required, rotate/revoke and issue a new invitation.
+
+### Guest/public endpoints
+
+| Method | Path | Authorization |
+|---|---|---|
+| POST | `/public/invitations/exchange` | Raw invitation token in POST JSON body |
+| GET | `/public/invitation` | Guest bearer token |
+| PUT | `/public/rsvps/{eventGuestId}` | Guest bearer token scoped to eligible guest/event |
+
+Token exchange:
+
+```json
+{ "token": "<raw-invitation-token>" }
+```
+
+Response:
+
+```json
+{ "guestAccessToken": "<short-lived-guest-jwt>", "expiresIn": 1800 }
+```
+
+RSVP:
+
+```http
+PUT /api/v1/public/rsvps/{eventGuestId}
+Authorization: Bearer <guest-access-token>
+Content-Type: application/json
+
+{"status":"ATTENDING","message":"Looking forward to it!"}
+```
+
+Statuses: `ATTENDING`, `NOT_ATTENDING`, `MAYBE`. Missing RSVP = `NO_RESPONSE`. Scope restricts recipient identities and eventGuest IDs; guest sees no internal household/finance/team data beyond intended invitation information.
+
+## 14. Vendors
+
+| Method | Path |
+|---|---|
+| GET, POST | `/weddings/{weddingId}/vendors` |
+| GET, PATCH, DELETE | `/weddings/{weddingId}/vendors/{vendorId}` |
+
+Example POST:
+
+```json
+{
+  "name": "Dream Frames Photography",
+  "category": "PHOTOGRAPHY",
+  "contactPerson": "Rahul",
+  "phone": "+91...",
+  "quotedAmount": {"amount":"175000.00","currency":"INR"},
+  "agreedAmount": {"amount":"150000.00","currency":"INR"},
+  "eventIds": ["<event-uuid>"]
+}
+```
+
+## 15. Finance: budget, categories, expenses, payments
+
+All endpoints require explicit `VIEW_FINANCE` for reads and/or `MANAGE_FINANCE` for writes.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/weddings/{weddingId}/finance/summary` | Budget/committed/paid/outstanding summaries |
+| GET | `/weddings/{weddingId}/budget` | Get singleton budget |
+| PUT | `/weddings/{weddingId}/budget` | Create/replace singleton budget |
+| GET, POST | `/weddings/{weddingId}/budget-categories` | List/create categories |
+| PATCH, DELETE | `/weddings/{weddingId}/budget-categories/{categoryId}` | Update/delete category |
+| GET, POST | `/weddings/{weddingId}/expenses` | List/create expenses |
+| GET, PATCH, DELETE | `/weddings/{weddingId}/expenses/{expenseId}` | Read/update/delete expense |
+| GET, POST | `/weddings/{weddingId}/expenses/{expenseId}/milestones` | Payment schedule |
+| PATCH, DELETE | `/weddings/{weddingId}/expenses/{expenseId}/milestones/{milestoneId}` | Edit milestone |
+| GET, POST | `/weddings/{weddingId}/expenses/{expenseId}/payments` | List/record actual payment |
+| PATCH, DELETE | `/weddings/{weddingId}/expenses/{expenseId}/payments/{paymentId}` | Correct/delete payment with audit |
+| GET | `/weddings/{weddingId}/payments/upcoming` | Upcoming milestone obligations |
+
+Example expense:
+
+```json
+{
+  "name": "Photography Package",
+  "categoryId": "<uuid>",
+  "vendorId": "<uuid>",
+  "eventId": "<uuid>",
+  "totalAmount": {"amount":"150000.00","currency":"INR"},
+  "expenseDate": "2027-01-01"
+}
+```
+
+Example milestone:
+
+```json
+{
+  "name": "Advance",
+  "amountDue": {"amount":"30000.00","currency":"INR"},
+  "dueDate": "2027-01-01"
+}
+```
+
+Payment:
+
+```http
+POST /api/v1/weddings/{weddingId}/expenses/{expenseId}/payments
+Idempotency-Key: <uuid>
+Content-Type: application/json
+```
+
+```json
+{
+  "paymentMilestoneId": "<uuid>",
+  "amount": {"amount":"30000.00","currency":"INR"},
+  "paidAt": "2027-01-01T10:30:00+05:30",
+  "paymentMethod": "BANK_TRANSFER",
+  "reference": "TXN12345"
+}
+```
+
+Response `201 Created`. Derived status/paid/outstanding is read from records, not duplicated in `expenses`.
+
+## 16. Private document upload/download
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/weddings/{weddingId}/documents/upload-requests` | Request short-lived signed object upload |
+| POST | `/weddings/{weddingId}/documents` | Confirm upload and associate |
+| GET | `/weddings/{weddingId}/documents` | List authorized files |
+| GET | `/weddings/{weddingId}/documents/{documentId}` | File metadata |
+| DELETE | `/weddings/{weddingId}/documents/{documentId}` | Soft delete/mark unavailable |
+| POST | `/weddings/{weddingId}/documents/{documentId}/download-url` | Short-lived private download URL |
+
+Upload intent example:
+
+```json
+{
+  "fileName": "photography-contract.pdf",
+  "contentType": "application/pdf",
+  "sizeBytes": 284919
+}
+```
+
+Response contains `uploadId`, `uploadUrl` and `expiresAt`. Do **not** rely on a client-supplied storage key to authorize a file. Confirm request's ID, uploaded object identity, size/type and same-wedding parent association server-side before recording document metadata.
+
+Confirm upload:
+
+```json
+{ "uploadId": "<uuid>", "association": {"type":"VENDOR","id":"<vendor-uuid>"} }
+```
+
+## 17. Gifts and return gifts
+
+| Method | Path |
+|---|---|
+| GET, POST | `/weddings/{weddingId}/gifts` |
+| GET, PATCH, DELETE | `/weddings/{weddingId}/gifts/{giftId}` |
+| GET, POST | `/weddings/{weddingId}/return-gifts` |
+| PATCH, DELETE | `/weddings/{weddingId}/return-gifts/{itemId}` |
+| POST | `/weddings/{weddingId}/return-gifts/{itemId}/distributions` |
+
+Gift privacy is separate from ordinary guest visibility. Return-gift stock remaining is derived from distributions rather than maintained as a second free-running counter.
+
+## 18. Seating
+
+| Method | Path |
+|---|---|
+| GET, POST | `/weddings/{weddingId}/events/{eventId}/seating-tables` |
+| PATCH, DELETE | `/weddings/{weddingId}/events/{eventId}/seating-tables/{tableId}` |
+| PUT | `/weddings/{weddingId}/events/{eventId}/guests/{guestId}/seat` |
+| DELETE | `/weddings/{weddingId}/events/{eventId}/guests/{guestId}/seat` |
+| GET | `/weddings/{weddingId}/events/{eventId}/seating/unassigned-guests` |
+
+Seat assignment `PUT`:
+
+```json
+{ "tableId": "<uuid>", "seatLabel": null }
+```
+
+Must validate event, guest eligibility, same-wedding table, unique assignment, and table capacity atomically. Default unassigned listing may filter to `ATTENDING` RSVPs.
+
+## 19. Website, media and livestream
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/weddings/{weddingId}/website` | Private site configuration |
+| PATCH | `/weddings/{weddingId}/website` | Set slug, visibility, sections, theme |
+| POST | `/weddings/{weddingId}/website/publish` | Publish |
+| POST | `/weddings/{weddingId}/website/unpublish` | Unpublish |
+| GET | `/public/weddings/{slug}` | Public/unlisted curated wedding site |
+| POST | `/weddings/{weddingId}/media/upload-requests` | Signed upload intent |
+| POST | `/weddings/{weddingId}/media` | Confirm media upload |
+| GET | `/weddings/{weddingId}/media` | List private media |
+| PATCH, DELETE | `/weddings/{weddingId}/media/{mediaId}` | Update/remove media |
+| GET, PUT, DELETE | `/weddings/{weddingId}/events/{eventId}/livestream` | Approved external video link |
+
+Wedding website config example:
+
+```json
+{
+  "slug": "arjun-and-anjali",
+  "visibility": "PUBLIC",
+  "headline": "We're getting married!",
+  "coupleMessage": "...",
+  "themeConfig": {},
+  "layoutConfig": {}
+}
+```
+
+The public DTO excludes guest manifests, expenses, team/member emails, private media, contracts, documents and tasks. Publishing is a domain command, not simply setting arbitrary internal DB flags.
+
+## 20. Activity, audit and notifications
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/weddings/{weddingId}/activity` | Permission-filtered human-readable activity |
+| GET | `/weddings/{weddingId}/audit-logs` | Authorized sensitive audit history |
+| POST | `/weddings/{weddingId}/member-invitations/{id}/resend` | Requeue invitation email |
+| POST | `/weddings/{weddingId}/guest-invitations/{id}/send` | Queue guest email (`202`) |
+
+No public CRUD operations for audit logs, and **no** generic `POST /send-email` endpoint. Email must be triggered by domain actions and stored as durable work.
+
+Audit filters: `actorUserId`, `action`, `entityType`, `from`, `to`. Audit read access is narrower than basic membership and responses must respect private finance/task visibility.
+
+## 21. Validation and tenant-security requirements
+
+Every private wedding-scoped request follows:
+
+```text
+Authenticate user
+  → Resolve active wedding membership
+  → Check functional permission
+  → Check resource wedding_id association
+  → Check item-level visibility rules
+  → Perform operation / emit audit
+```
+
+Examples of required validation:
+
+- Wedding event end time does not precede start time.
+- Payment amount is positive and currency consistent.
+- Vendor/event/category IDs must belong to the same wedding.
+- Owner invitation targets a legitimate vacant/recoverable BRIDE/GROOM slot.
+- Guest cannot RSVP for an event missing from their invitation.
+- Table capacity cannot be exceeded by simultaneous seat requests.
+- Private task listing and activity feed cannot reveal existence to unauthorized members.
+- Email verification/password reset failures do not expose whether an account exists.
+- Uploaded document parent associations remain wedding-scoped.
+
+Angular form validation improves UX; the backend remains authoritative.
+
+## 22. Rate limiting and security headers
+
+Redis rate limiting on `login`, password recovery, account verification, invitation exchange, RSVP, member invitation creation and email send operations.
+
+Example limit response:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 60
+Content-Type: application/problem+json
+```
+
+CORS must permit only explicit application origins. Auth refresh cookies require correct HTTPS, SameSite, CSRF/origin protection. Avoid raw token printing in browser/app logs.
+
+## 23. Angular API consumption
+
+```text
+Feature component
+  → Feature facade/store (Signals/RxJS)
+  → Generated API client
+  → Angular HTTP interceptors
+  → /api/v1
+```
+
+Interceptors handle auth header, coordinated refresh, correlation ID and Problem Details. Components should not embed raw backend URLs or understand refresh-token mechanics.
+
+## 24. Testing checklist
+
+- [ ] Register, verify, login, refresh, logout and reset password.
+- [ ] Bride creates wedding → BRIDE owner, groom accepts invite → GROOM owner.
+- [ ] Family creates wedding → setup ADMIN, both partners independently become OWNER.
+- [ ] Family member without finance permission → `403` on expense read.
+- [ ] Wedding A member requesting Wedding B entity → no disclosure.
+- [ ] Invitation exchange limits guest access to explicitly included events.
+- [ ] Multiple RSVP submissions update one current RSVP reliably.
+- [ ] Payment POST retried with same idempotency key → one payment.
+- [ ] Concurrent expense edits return `412` appropriately.
+- [ ] Over-capacity seating fails without corrupting assignments.
+- [ ] Expired/revoked token cannot open private data.
+- [ ] File upload/download verifies owner, wedding, size, type and expiry.
+- [ ] Public website responds only when published and filters private data.
+- [ ] Audit records sensitive changes; logs contain no secrets.
+- [ ] Flyway/schema verification and OpenAPI contract checks pass in CI.
+
+## 25. Implementation handoff and unresolved decisions
+
+The next backend deliverable should be `docs/api/openapi.yaml` with fully resolved DTO definitions, security schemes, parameter types, response examples and reusable error components. Before code generation, decide:
+
+- JWT/refresh design versus Redis Spring Session.
+- Exact default role permission matrix.
+- Invitation expiration/response cutoff and guest access revocation behavior.
+- Payment refunds/overpayments and idempotency persistence.
+- Version requirement/ETag coverage for each mutable resource.
+- Archive-mode mutability and owner transfer/recovery semantics.
+- Upload quotas and website/public privacy defaults.
+
+---
+
+**Related documentation:** [Product Requirements](01-product-requirements.md) · [System Architecture](02-system-architecture.md) · [Database Design](03-database-design.md)
