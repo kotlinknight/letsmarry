@@ -1,0 +1,108 @@
+<section class="tokens-page">
+  <header class="page-heading">
+    <p>Design system / Foundations</p>
+    <h1>Tokens that feel joyful, clear and distinctly ours.</h1>
+    <span>
+      These values mirror the local Figma variable collections. Components consume semantic roles so
+      both themes stay consistent as the palette evolves.
+    </span>
+  </header>
+
+  <section class="token-section" aria-labelledby="color-heading">
+    <div class="section-heading">
+      <div>
+        <p>01</p>
+        <h2 id="color-heading">Color primitives</h2>
+      </div>
+      <span>Selected stops are shown below; the stylesheet contains the full reviewed scale.</span>
+    </div>
+
+    <div class="palette-grid">
+      @for (group of colorGroups; track group.name) {
+        <article class="palette-card">
+          <div class="palette-title">
+            <div>
+              <h3>{{ group.name }}</h3>
+              <p>{{ group.description }}</p>
+            </div>
+            <span>{{ group.colors.length }} stops</span>
+          </div>
+          <div class="swatches">
+            @for (color of group.colors; track color.name) {
+              <div class="swatch">
+                <span [style.background]="color.value"></span>
+                <small>{{ color.name }}</small>
+                <code>{{ color.value }}</code>
+              </div>
+            }
+          </div>
+        </article>
+      }
+    </div>
+  </section>
+
+  <section class="token-section" aria-labelledby="semantic-heading">
+    <div class="section-heading">
+      <div>
+        <p>02</p>
+        <h2 id="semantic-heading">Semantic roles</h2>
+      </div>
+      <span>Use roles in application components instead of fixed primitive colors.</span>
+    </div>
+
+    <div class="semantic-demo">
+      <div class="semantic-copy">
+        <p class="demo-eyebrow">A tiny invitation to celebrate</p>
+        <h3>Build with meaning.</h3>
+        <p>
+          Canvas, surfaces, text, borders and actions change together when the theme changes. The
+          hierarchy remains familiar in every mode.
+        </p>
+        <div class="demo-actions">
+          <button type="button">Primary action</button>
+          <button class="secondary" type="button">Secondary</button>
+        </div>
+      </div>
+      <div class="role-list">
+        <div><span class="role-sample canvas"></span><code>--bg-canvas</code></div>
+        <div><span class="role-sample surface"></span><code>--bg-surface</code></div>
+        <div><span class="role-sample brand"></span><code>--bg-brand</code></div>
+        <div><span class="role-sample focus"></span><code>--border-focus</code></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="token-section" aria-labelledby="rhythm-heading">
+    <div class="section-heading">
+      <div>
+        <p>03</p>
+        <h2 id="rhythm-heading">Spacing and shape</h2>
+      </div>
+      <span>A four-pixel base rhythm scales from compact controls to spacious layouts.</span>
+    </div>
+
+    <div class="rhythm-grid">
+      <article>
+        <h3>Spacing scale</h3>
+        <div class="spacing-list">
+          @for (space of spacingTokens; track space) {
+            <div>
+              <span [style.width.px]="space"></span>
+              <code>{{ space }}px</code>
+            </div>
+          }
+        </div>
+      </article>
+      <article>
+        <h3>Radius scale</h3>
+        <div class="radius-list">
+          <div class="radius-sm"><span>8</span></div>
+          <div class="radius-md"><span>12</span></div>
+          <div class="radius-lg"><span>16</span></div>
+          <div class="radius-xl"><span>24</span></div>
+          <div class="radius-pill"><span>Pill</span></div>
+        </div>
+      </article>
+    </div>
+  </section>
+</section>

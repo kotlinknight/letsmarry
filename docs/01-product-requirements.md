@@ -129,7 +129,7 @@ The application starts free; monetization is a later decision.
 1. Each wedding has at most one currently active BRIDE owner and one active GROOM owner.
 2. An owner must map to the appropriate couple profile; the profile can exist before account signup.
 3. A wedding may be created by a family member or friend: they become a **setup admin**, never a hidden owner.
-4. Joining as an owner requires secure invitation/claim verification; a creator cannot impersonate the couple.
+4. A verified account creating a new wedding may self-declare BRIDE/GROOM and become that owner. Subsequent owner claims require a secure invitation and verified intended email; a setup admin cannot claim ownership on behalf of the couple.
 5. Standard member-management endpoints cannot silently remove or demote an owner.
 6. Multiple admins are allowed.
 7. Authorization is enforced on the backend for every read/write, not just by hiding UI.
@@ -268,7 +268,7 @@ The application starts free; monetization is a later decision.
 
 | Area | Requirement |
 |---|---|
-| Security | TLS, secure authentication, refresh rotation/session revocation, hashed invitation tokens, server authorization |
+| Security | TLS, Redis-backed planner sessions, HttpOnly cookies, CSRF protection, session revocation, hashed invitation tokens, server authorization |
 | Tenancy | Shared PostgreSQL schema; wedding_id-scoped reads and writes and cross-wedding FK validation |
 | Reliability | Reliable email delivery via outbox, retries and deduplication |
 | Performance | Pagination and indexed filtering for lists; dashboard uses targeted summaries |
@@ -281,6 +281,8 @@ The application starts free; monetization is a later decision.
 | Localization | English MVP, sensible Indian defaults while storing explicit IANA timezones/currency |
 
 ## 10. MVP delivery phases
+
+Before the product phases below, **Milestone 0** delivers the technical foundation in separately approved stages: 0A repository/docs, 0B backend/local services, 0C Angular/design shell, and 0D testing/CI/container verification. Milestone 0 implements no business features. See the [development plan](05-development-plan.md).
 
 1. **Foundation:** auth, wedding creation, couple profiles, ownership and membership.
 2. **Core planning:** dashboard, events, tasks and assignments.
@@ -318,7 +320,7 @@ WhatsApp notifications, paid tiers, AI assistance, deeper analytics, native apps
 
 - All in-scope journeys can complete on desktop/mobile browsers.
 - Each privacy-sensitive module passes permission and cross-tenant security tests.
-- Couple ownership cannot be assigned or revoked without authorized verification.
+- Couple ownership follows the verified-creator self-declaration rule for a new workspace and verified invitation acceptance for subsequent claims; ordinary member management cannot revoke ownership.
 - Guest RSVP works without an account and only exposes invited information.
 - Expenses and recorded payments produce internally consistent totals.
 - Delivery and upload workflows tolerate retries/failures.

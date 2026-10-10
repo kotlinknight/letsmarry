@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+        working-directory: backend
+
+      - name: Build and test backend
+        run: ./gradlew build --no-daemon
+        working-directory: backend
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.2
+          package-manager-cache: false
+
+      - name: Use the project npm version
+        run: npm install --global npm@11.21.0
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Check formatting
+        run: npm run format:check
+        working-directory: frontend
+
+      - name: Run unit tests
+        run: npm test -- --watch=false
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Run browser tests
+        run: npm run test:e2e
+        working-directory: frontend
+
+  images:
+    name: Containers
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: makemymarriage-ci
+      POSTGRES_DB: makemymarriage
+      POSTGRES_USER: makemymarriage
+      POSTGRES_PASSWORD: ci-only-not-a-secret
+      POSTGRES_PORT: 15432
+      REDIS_PORT: 16379
+      MAILPIT_SMTP_PORT: 11025
+      MAILPIT_HTTP_PORT: 18025
+      BACKEND_CONTAINER_PORT: 18080
+      FRONTEND_CONTAINER_PORT: 14200
+      SESSION_TIMEOUT: 30m
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate Compose configuration
+        run: docker compose -f infrastructure/docker-compose.yml --profile application config --quiet
+
+      - name: Build and start application containers
+        run: docker compose -f infrastructure/docker-compose.yml --profile application up --detach --build --wait
+
+      - name: Smoke test the container stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          readiness="$(curl --fail --silent --show-error \
+            http://127.0.0.1:18080/actuator/health/readiness)"
+          grep --quiet '"status":"UP"' <<<"${readiness}"
+
+          root_page="$(curl --fail --silent --show-error http://127.0.0.1:14200/)"
+          deep_page="$(curl --fail --silent --show-error \
+            http://127.0.0.1:14200/design-tokens)"
+          grep --quiet '<app-root' <<<"${root_page}"
+          grep --quiet '<app-root' <<<"${deep_page}"
+
+          api_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            http://127.0.0.1:14200/api/not-a-real-endpoint)"
+          test "${api_status}" = "401"
+
+          headers="$(curl --silent --head http://127.0.0.1:14200/ | tr -d '\r')"
+          grep --quiet '^Content-Security-Policy:' <<<"${headers}"
+          grep --quiet '^X-Content-Type-Options: nosniff$' <<<"${headers}"
+          grep --quiet '^X-Frame-Options: DENY$' <<<"${headers}"
+
+      - name: Show container logs after a failure
+        if: failure()
+        run: docker compose -f infrastructure/docker-compose.yml --profile application logs --no-color --tail 200
+
+      - name: Stop application containers
+        if: always()
+        run: docker compose -f infrastructure/docker-compose.yml --profile application down

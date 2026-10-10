@@ -99,11 +99,11 @@ CREATE UNIQUE INDEX ux_users_email_ci ON users (lower(email));
 
 ### `password_reset_tokens`, `email_verification_tokens`
 
-Each has `id UUID PK`, `user_id UUID FK`, unique `token_hash`, `expires_at`, used/verified timestamp and `created_at`. Raw secret is never stored. Token lifecycle and expiry are validated by backend. Consider storing a keyed HMAC instead of plain SHA-256 if token entropy or database-compromise model warrants it.
+Each has `id UUID PK`, `user_id UUID FK`, unique `token_hash`, `expires_at`, used/verified timestamp and `created_at`. These token records store only hashes. Sensitive delivery material may be encrypted temporarily in `email_outbox`, with its key outside PostgreSQL, then purged after delivery or expiry. Token lifecycle and expiry are validated by backend. Consider storing a keyed HMAC instead of plain SHA-256 if token entropy or database-compromise model warrants it.
 
-### Refresh sessions
+### Planner sessions
 
-Initial design stores active rotating refresh-session/family state in **Redis**, not a business-data table. Session revocation/refresh replay handling require atomic operations and TTLs. Consider durable DB persistence if future audit or session-recovery requirements demand it.
+Spring Session stores planner sessions in **Redis**, not a PostgreSQL business-data table. The browser uses an opaque HttpOnly session cookie with CSRF protection. Logout invalidates the server session; expiry and account-security invalidation rules must be specified before account implementation. There are no planner access/refresh JWTs or refresh-family tables. See [ADR-007](adr/ADR-007-redis-sessions.md).
 
 ## 5. Table catalog — Wedding and members
 
@@ -119,17 +119,17 @@ Initial design stores active rotating refresh-session/family state in **Redis**,
 
 Unique key: `UNIQUE(wedding_id,couple_role)`.
 
-Creation inserts two profiles, even if no owner has an account yet.
+Creation inserts two profiles, even if no owner has an account yet. Wedding creation, both profiles, and the creator's owner/admin membership commit together in one PostgreSQL transaction inside the `wedding` module; see [ADR-014](adr/ADR-014-wedding-membership.md).
 
 ### `wedding_members`
 
-`id PK`, `wedding_id FK`, `user_id FK`, `member_role VARCHAR(30)` (`OWNER`, `ADMIN`, `FAMILY_MEMBER`, `COLLABORATOR`), `couple_role VARCHAR(20) NULL`, `relationship_label VARCHAR(100)`, `status` (`ACTIVE`, `SUSPENDED`, `LEFT`), `invited_by_user_id`, `joined_at`, audit columns and version.
+`id PK`, `wedding_id FK`, `user_id FK`, `member_role VARCHAR(30) NOT NULL` (`OWNER`, `ADMIN`, `FAMILY_MEMBER`, `COLLABORATOR`), `couple_role VARCHAR(20) NULL`, `relationship_label VARCHAR(100)`, `status` (`ACTIVE`, `SUSPENDED`, `LEFT`), `invited_by_user_id`, `joined_at`, audit columns and version.
 
 Constraints:
 
 ```sql
 CHECK (
-  (member_role = 'OWNER' AND couple_role IN ('BRIDE','GROOM'))
+  (member_role = 'OWNER' AND couple_role IS NOT NULL AND couple_role IN ('BRIDE','GROOM'))
   OR (member_role <> 'OWNER' AND couple_role IS NULL)
 )
 ```
@@ -144,7 +144,7 @@ CREATE UNIQUE INDEX ux_active_owner_slot
   WHERE member_role='OWNER' AND status='ACTIVE' AND deleted_at IS NULL;
 ```
 
-Suspended or inactive owner transitions need an explicit security policy: choose whether they reserve ownership slots or whether a dedicated transfer/recovery process is required. Do **not** silently treat a suspended owner as a free slot.
+The explicit null check matters because a SQL `CHECK` also permits an unknown/null result. Suspended or inactive owner transitions still need an explicit security policy: the illustrative active-owner index alone does not reserve a suspended owner's slot. Resolve slot protection and recovery before implementing those transitions. Do **not** silently treat a suspended owner as a free slot.
 
 ### `permission_definitions`
 
@@ -351,9 +351,11 @@ Public reads must filter to published/allowed content and prevent unintended ind
 
 ### `email_outbox`
 
-`id PK`, optional `wedding_id FK`, `recipient_email`, `template_code`, `payload JSONB`, `status` (`PENDING`,`PROCESSING`,`SENT`,`FAILED`), `attempt_count`, `next_attempt_at`, `provider_message_id`, `last_error`, `created_at`, `sent_at`.
+`id PK`, optional `wedding_id FK`, `recipient_email`, `template_code`, `payload JSONB` (non-secret template data), `status` (`PENDING`,`PROCESSING`,`SENT`,`FAILED`), `attempt_count`, `next_attempt_at`, `provider_message_id`, `last_error` (redacted), `created_at`, `sent_at`.
 
-**Alternative:** use Spring Modulith's persistent event publication mechanism instead of maintaining a duplicate custom outbox. Select one authoritative delivery pipeline during implementation; both catalog descriptions represent the same requirement of durable retryable notification work.
+**Accepted:** this table is the sole durable email work source; do not add a duplicate Spring Modulith persistent publication pipeline. Registration must insert its user, verification-token record, and outbox entry atomically. See [ADR-009](adr/ADR-009-email-outbox.md).
+
+Refine the schema with worker-claim/lease metadata, stable delivery/deduplication identity, encrypted sensitive payload and key-version metadata, and expiry/purge support when implementing the account milestone. Keep encryption keys outside PostgreSQL. Do not place raw tokens in ordinary JSON payloads, logs, or audit records. The worker sends outside database transactions, safely reclaims expired work, retries with bounded exponential backoff, and records provider results. At-least-once delivery may produce duplicates after a crash; it is not an exactly-once guarantee.
 
 ### `audit_logs`
 
@@ -432,7 +434,7 @@ V028__create_audit_log.sql
 V029__create_indexes.sql
 ```
 
-These are **proposed** names/order. A table dependency (e.g. `audit_logs` FK targets) can require earlier/later migration adjustment; let schema tests determine final sequence. Append `V030__...` onward for later changes.
+These are **illustrative** names/order, not migrations to generate during Milestone 0. Add schema changes with each implemented feature and number them in that actual order. Account verification needs its outbox before wedding features; introduce any optional wedding association only when its referenced table exists. Audit tables likewise arrive with the first audited feature. Once migrations are shared, append new versions rather than renumbering or editing them.
 
 Example application config:
 
@@ -497,7 +499,7 @@ GROUP BY e.id,e.name,e.total_amount;
 - [ ] Guest event invitation determines RSVP access.
 - [ ] Financial sums come from payment rows; mutation audited.
 - [ ] Seating assignments reject cross-event and over-capacity operations.
-- [ ] Token hashes are unique; no raw token stored.
+- [ ] Token tables are hash-only; temporary sensitive outbox delivery material is encrypted and purged after delivery or expiry, with no raw tokens in logs or audit.
 - [ ] Soft-delete uniqueness, indexes and normal filters match.
 - [ ] Flyway works from a clean DB and Hibernate validates.
 - [ ] No cross-tenant access in repository/API integration tests.

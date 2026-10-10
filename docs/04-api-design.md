@@ -8,7 +8,7 @@
 **Frontend:** Angular + generated/typed OpenAPI client  
 **Format:** JSON, RFC 9457 Problem Details for errors
 
-> This is an API **design document**, not yet a machine-readable OpenAPI YAML file or a deployed Swagger endpoint. Endpoints and sample DTOs should be formalized in `docs/api/openapi.yaml` before controller implementation.
+> This is an API **design document**, not yet a machine-readable OpenAPI YAML file or a deployed Swagger endpoint. Formalize each implemented business slice in `docs/api/openapi.yaml` before its controllers; do not generate the entire future API during Milestone 0.
 
 ## 1. API principles
 
@@ -30,8 +30,10 @@
 | Environment | Example |
 |---|---|
 | Local | `http://localhost:8080/api/v1` |
-| Staging | `https://api-staging.makemymarriage.com/api/v1` (illustrative) |
-| Production | `https://api.makemymarriage.com/api/v1` (illustrative) |
+| Staging | `https://staging.makemymarriage.com/api/v1` (illustrative application origin) |
+| Production | `https://makemymarriage.com/api/v1` (illustrative application origin) |
+
+Angular uses relative `/api/v1` URLs through a development proxy locally and a same-origin reverse proxy when deployed. The hostnames above are examples, not selected deployment domains.
 
 JSON requests send `Content-Type: application/json`, responses `application/json`, errors `application/problem+json`.
 
@@ -51,14 +53,14 @@ JSON requests send `Content-Type: application/json`, responses `application/json
 ### Private planner endpoints
 
 ```http
-Authorization: Bearer <short-lived-access-token>
+Cookie: SESSION=<opaque-session-id>
 ```
 
-- Access JWT remains in Angular memory, not localStorage.
-- Refresh credential is a rotating secure HttpOnly cookie, with Redis-backed server-side state.
-- Protected refresh/logout endpoints use appropriate cookie `SameSite`, Origin and CSRF controls based on topology.
-- Angular coordinates a **single** refresh attempt if concurrent calls expire; retry original calls once.
-- Auth implementation is **provisional** pending final JWT vs Spring Session ADR; keep API surface adaptable.
+- Spring Session stores planner sessions in Redis. The browser sends an opaque HttpOnly session cookie; Angular cannot read the session credential.
+- Use `Secure` cookies under deployed HTTPS, deliberate `SameSite` settings, trusted-origin checks, and CSRF protection for cookie-authenticated writes. Local HTTP exceptions are local-only.
+- Bootstrap CSRF state before protected writes and obtain a fresh CSRF token after login/logout. Cookie/header names and bootstrap endpoint details will be formalized in the account OpenAPI contract; `SESSION` above is illustrative.
+- Login establishes the session; `/users/me` restores identity after page reload. Expired/invalid sessions return `401`; Angular handles reauthentication without a JWT refresh/retry loop.
+- [ADR-007](adr/ADR-007-redis-sessions.md) is accepted. Planner access/refresh JWTs and `/auth/refresh` are removed from the design.
 
 ### Guest invitations
 
@@ -73,9 +75,8 @@ Authorization: Bearer <short-lived-access-token>
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/auth/register` | Register account |
-| POST | `/auth/login` | Login; establish refresh cookie |
-| POST | `/auth/refresh` | Rotate refresh session; issue new access token |
-| POST | `/auth/logout` | Revoke refresh session, clear cookie |
+| POST | `/auth/login` | Login; establish Redis-backed session cookie and return user |
+| POST | `/auth/logout` | Invalidate server session and clear cookie |
 | POST | `/auth/email/verify` | Verify email using secure token |
 | POST | `/auth/password/forgot` | Request password reset; non-enumerating response |
 | POST | `/auth/password/reset` | Reset with valid token |
@@ -105,13 +106,11 @@ Example login response:
 
 ```json
 {
-  "accessToken": "<jwt>",
-  "expiresIn": 900,
   "user": { "id": "<uuid>", "displayName": "Anjali", "email": "anjali@example.com" }
 }
 ```
 
-Refresh returns `{ "accessToken": "<jwt>", "expiresIn": 900 }`; logout returns `204 No Content`. Never return refresh credentials in JSON.
+Login sets the HttpOnly session cookie through `Set-Cookie`; it does not return session credentials in JSON. Logout returns `204 No Content`, invalidates the server session, and clears the cookie. Both flows require the agreed CSRF handling. Authentication examples show bodies/paths rather than every cookie or CSRF header.
 
 ## 5. HTTP responses and errors
 
@@ -230,9 +229,10 @@ Content-Type: application/json
 
 **Create rules:**
 
-- BRIDE/GROOM → corresponding owner role on creation.
+- Verified creator self-declaring BRIDE/GROOM → corresponding owner role on creation of a new wedding.
 - FAMILY_MEMBER/FRIEND → setup `ADMIN` and empty owner slots.
 - Create two couple profiles even if account(s) are unlinked.
+- Commit the wedding, both profiles, and initial membership synchronously in one PostgreSQL transaction inside the wedding module.
 - Return `201 Created`, `Location: /api/v1/weddings/{id}`, and wedding/creator-membership summary.
 - Partner owner invitations may be created during a separate optional step, before/after first dashboard access.
 
@@ -290,13 +290,14 @@ Acceptance:
 
 ```http
 POST /api/v1/member-invitations/accept
-Authorization: Bearer <access-token>
+Cookie: SESSION=<opaque-session-id>
+X-XSRF-TOKEN: <csrf-token>
 Content-Type: application/json
 
 {"token":"<raw-member-invitation-token>"}
 ```
 
-Acceptance verifies hash, expiry, email ownership and target role/slot, links couple profile where applicable, creates active membership and marks invitation used atomically. Unauthorized people cannot assign themselves OWNER or demote an owner via normal member APIs.
+Cookie/header names above are illustrative pending the account OpenAPI contract. Acceptance verifies the session, CSRF, invitation hash, expiry, email ownership and target role/slot, links couple profile where applicable, creates active membership and marks invitation used atomically. Unauthorized people cannot assign themselves OWNER or demote an owner via normal member APIs.
 
 ## 10. Events
 
@@ -407,6 +408,8 @@ Example invitation create:
 ```
 
 Creation response may return one-time `shareUrl` to authorized organizer. **Never subsequently reveal the raw token** from ordinary list APIs; if regeneration is required, rotate/revoke and issue a new invitation.
+
+Queued email may retain sensitive link material only as temporary encrypted outbox data, purged after delivery or expiry. A later send/resend cannot reconstruct a token from its hash; specify fresh issue/rotation and prior-link behavior before implementing that command. See [ADR-009](adr/ADR-009-email-outbox.md).
 
 ### Guest/public endpoints
 
@@ -664,7 +667,7 @@ Retry-After: 60
 Content-Type: application/problem+json
 ```
 
-CORS must permit only explicit application origins. Auth refresh cookies require correct HTTPS, SameSite, CSRF/origin protection. Avoid raw token printing in browser/app logs.
+CORS, if needed, must permit only explicit application origins; same-origin planner/API access is the baseline. Session cookies require HTTPS in deployment, deliberate SameSite settings, and CSRF/origin protection. Avoid raw token printing in browser/app logs.
 
 ## 23. Angular API consumption
 
@@ -676,11 +679,12 @@ Feature component
   → /api/v1
 ```
 
-Interceptors handle auth header, coordinated refresh, correlation ID and Problem Details. Components should not embed raw backend URLs or understand refresh-token mechanics.
+Planner HTTP infrastructure handles CSRF, session-expiry responses, correlation ID and Problem Details. Guest bearer attachment is restricted to the guest invitation/RSVP API. Components should not embed raw backend URLs or read session credentials; there is no planner refresh-token mechanism.
 
 ## 24. Testing checklist
 
-- [ ] Register, verify, login, refresh, logout and reset password.
+- [ ] Register, verify, login, restore identity through `/users/me`, logout and reset password.
+- [ ] CSRF protection/renewal, session expiry/revocation, and cookie configuration work correctly.
 - [ ] Bride creates wedding → BRIDE owner, groom accepts invite → GROOM owner.
 - [ ] Family creates wedding → setup ADMIN, both partners independently become OWNER.
 - [ ] Family member without finance permission → `403` on expense read.
@@ -698,9 +702,9 @@ Interceptors handle auth header, coordinated refresh, correlation ID and Problem
 
 ## 25. Implementation handoff and unresolved decisions
 
-The next backend deliverable should be `docs/api/openapi.yaml` with fully resolved DTO definitions, security schemes, parameter types, response examples and reusable error components. Before code generation, decide:
+For the first business API slice after Milestone 0, introduce `docs/api/openapi.yaml` (OpenAPI 3.0.3) with resolved DTO definitions, security schemes, parameter types, response examples and reusable error components. Expand it per feature. Resolve the following before the corresponding feature's code generation or implementation; they do not require business scaffolding during Milestone 0:
 
-- JWT/refresh design versus Redis Spring Session.
+- Session timeout/invalidation policy, CSRF bootstrap endpoint, and final cookie/header names under accepted Redis Spring Session authentication.
 - Exact default role permission matrix.
 - Invitation expiration/response cutoff and guest access revocation behavior.
 - Payment refunds/overpayments and idempotency persistence.

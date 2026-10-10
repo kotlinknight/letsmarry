@@ -1,0 +1,30 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+
+# Java / Gradle output (keep the Gradle wrapper JAR trackable)
+backend/.gradle/
+backend/build/
+backend/out/
+*.class
+hs_err_pid*
+
+# Angular / Node output
+frontend/node_modules/
+frontend/.angular/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log

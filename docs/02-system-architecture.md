@@ -56,17 +56,17 @@ All planner functionality, guest link exchanges, and public read endpoints share
 |---|---|---|
 | Web | Angular + TypeScript | One SPA, planner and guest/public routes |
 | Frontend state | Angular Signals/RxJS | Feature-level stores/services, avoid global state overengineering |
-| API | REST + OpenAPI | Versioned `/api/v1`, contract-first or generated/verified specification |
-| Backend | Java + Spring Boot | Latest compatible supported versions selected at project setup |
+| API | REST + OpenAPI | Versioned `/api/v1`, contract-first per implemented slice; generated Angular client |
+| Backend | Java + Spring Boot | Approved baseline in the development plan; verify official compatibility before generation/install |
 | Architecture | Modular Monolith | Spring Modulith verifies dependencies and integration behavior |
-| Auth | Spring Security | Short-lived access JWT + rotating HttpOnly refresh-cookie session initially proposed |
+| Auth | Spring Security + Spring Session | Redis-backed planner session, HttpOnly cookie and CSRF protection; ADR-007 accepted |
 | Primary DB | PostgreSQL | Relational data, joins, FTS/trigram for search |
 | Migrations | Flyway | Mandatory, versioned, immutable once shared |
 | Persistence | Spring Data JPA/Hibernate | `ddl-auto=validate`; explicit projections for reports |
 | Cache/session/rate limit | Redis | Required from day one, locally in Docker |
 | Files | Private object storage | Azure Blob/S3-compatible provider via abstraction; signed upload/download |
 | Email | Provider adapter | Mailpit locally; free-tier provider choice can change |
-| Background work | Spring application/Modulith events + durable outbox | No Kafka/RabbitMQ initially |
+| Background work | PostgreSQL transactional email outbox + Spring Boot worker | One durable email pipeline; no Kafka/RabbitMQ or Redis email queue |
 | Local development | Docker Compose | PostgreSQL, Redis, Mailpit (+ optional storage emulator) |
 | CI/CD | GitHub Actions | Test, lint, build images and eventually deploy |
 | Telemetry (MVP) | Actuator, Micrometer, structured logs | Correlation IDs, metrics/health |
@@ -84,7 +84,6 @@ Suggested business modules:
 ```text
 identity
 wedding
-membership
 event
 task
 guest
@@ -103,19 +102,21 @@ audit
 
 Each module owns its application services, domain model, persistence and public interfaces. Other modules interact through explicit APIs or published domain events; they should not reach directly into another module's repositories/JPA internals.
 
-Example layout:
+Initially, `wedding` includes creation, couple profiles, membership, and permissions in separated internal packages. Keep identity independent of wedding-specific roles. Create the wedding and its initial membership synchronously in one PostgreSQL transaction; asynchronous events must not create the initial owner/admin. See [ADR-014](adr/ADR-014-wedding-membership.md).
+
+Illustrative future layout; add business packages only with their first feature:
 
 ```text
 backend/src/main/java/com/makemymarriage/
 ├── MakeMyMarriageApplication.java
-├── shared/                  # tightly controlled infrastructure primitives
+├── platform/                # actual cross-cutting infrastructure configuration
 ├── identity/
 │   ├── api/                 # HTTP controllers + request/response DTOs
 │   ├── application/         # use cases and transactions
 │   ├── domain/              # invariants and domain services
 │   └── infrastructure/      # JPA, providers, adapters
 ├── wedding/
-├── membership/
+│   └── internal/            # creation, couple, membership and permissions packages
 ├── event/
 ├── task/
 ├── guest/
@@ -139,7 +140,7 @@ The module API should be small and stable. Public interfaces may include use-cas
 - Declare modules with explicit allowed dependencies.
 - Run `ApplicationModules.of(...).verify()` as a test.
 - Use application events for side effects that are logically downstream of a successful transaction.
-- For critical notifications, use a **persistent event publication/outbox mechanism** with retry and idempotent consumers.
+- For critical emails, persist work in the **PostgreSQL transactional email outbox** with retries and deduplication. Do not add a second persistent Modulith publication pipeline for the same emails.
 - Never rely on an in-memory `@Async` event alone to guarantee email delivery after a process crash.
 
 Example business interaction:
@@ -148,19 +149,22 @@ Example business interaction:
 sequenceDiagram
     participant Client as Angular
     participant Wedding as Wedding Module
-    participant Membership as Membership Module
+    participant Membership as Wedding Membership (internal)
     participant DB as PostgreSQL
-    participant Notification as Notification Module
+    participant Notification as Outbox Worker
     Client->>Wedding: POST /weddings
     Wedding->>DB: Create wedding and couple profiles
     Wedding->>Membership: Create creator membership
     Membership->>DB: Assign OWNER or ADMIN
     Wedding->>DB: Commit transaction
-    Client-->>Client: Wedding created
-    Note over Wedding,Notification: Invitations may be scheduled independently
-    Membership->>Notification: OwnerInvitationRequested event
-    Notification->>DB: Persist email delivery attempt
-    Notification-->>Client: Email arrives asynchronously
+    Wedding-->>Client: Wedding created
+    Note over Wedding,DB: Initial wedding and membership share one transaction
+    Client->>Wedding: Optional owner invitation command
+    Wedding->>DB: Persist invitation and email outbox entry atomically
+    Note over DB,Notification: Worker can process committed work
+    Notification->>DB: Claim pending email in a short transaction
+    Note over Notification: Send through provider after claim transaction ends
+    Notification->>DB: Record delivery result
 ```
 
 Keep application transactions bounded to local database operations. Avoid HTTP/email/cloud-storage side effects within an open DB transaction.
@@ -190,7 +194,7 @@ Wedding
        └── COLLABORATOR...
 ```
 
-A creator who selects BRIDE or GROOM becomes an owner in that role. A creator selecting FAMILY_MEMBER or FRIEND becomes setup ADMIN; they can arrange work and invite owners but cannot impersonate them.
+A verified account creating a new wedding may self-declare BRIDE or GROOM and becomes an owner in that role. A creator selecting FAMILY_MEMBER or FRIEND becomes setup ADMIN; they can arrange work and invite owners but cannot claim either owner position on behalf of the couple.
 
 Secure membership invitation acceptance links the verified intended account to the vacant couple-owner position in one transaction. The database enforces uniqueness; the application enforces legitimate claim, invite validation, no unauthorized owner demotion, and recovery policies.
 
@@ -207,21 +211,22 @@ The frontend may hide unavailable features, but every endpoint verifies authoriz
 
 ## 6. Authentication and account security
 
-### Initial authentication approach
+### Accepted planner authentication approach
 
 - Email/password with modern adaptive password hashing, account verification and password reset.
-- Access JWT is short-lived (initial example: 15 minutes), kept in Angular memory rather than localStorage.
-- Refresh credential is opaque, rotated on every use and issued as `Secure`, `HttpOnly` cookie with suitable `SameSite` policy.
-- Redis holds active refresh-session or token-family state and supports revocation, refresh reuse detection and rate limiting.
-- Logout revokes server state and expires the cookie.
-- CSRF protection and Origin checking are required wherever credentials are carried automatically by cookies; actual policy depends on deployment origins.
-- Authentication, guest RSVP, password reset and member invite tokens are **different token types** with different scopes and lifetimes.
+- Spring Session stores planner sessions in Redis; the browser carries an opaque session identifier in an HttpOnly cookie.
+- Use `Secure` cookies in deployed HTTPS environments and deliberate `SameSite` settings. Any local HTTP exception is local-only.
+- Plan same-origin frontend/API access through a development proxy locally and a reverse proxy in deployment.
+- Login establishes the session and returns the user; `/users/me` restores identity after a page reload. Logout invalidates server state and expires the cookie.
+- Protect cookie-authenticated writes with CSRF and trusted-origin checks. Bootstrap CSRF state and obtain a fresh token after login/logout; do not globally disable CSRF for the SPA.
+- Do not issue planner access/refresh JWTs or implement `/auth/refresh`.
+- Planner sessions, guest RSVP credentials, password-reset tokens, and member invitations have separate scopes and lifetimes.
 
-**Open ADR:** For a first-party SPA, Spring Session + Redis-backed server-side sessions and an HttpOnly cookie could simplify the auth design. Compare this with JWT/rotating refresh before writing authentication code. External OIDC, social login and passwordless links are potential later options.
+**Accepted ADR:** [ADR-007](adr/ADR-007-redis-sessions.md) replaces the provisional JWT/refresh design. Exact session lifetimes and account-security invalidation rules remain to be defined before account implementation. External OIDC, social login and passwordless links are potential later options.
 
 ### Security rules
 
-- Store only hashes of high-entropy invitation/reset/RSVP raw tokens.
+- Store only hashes of high-entropy invitation/reset/RSVP secrets in their token records. Sensitive delivery material may be encrypted temporarily in the email outbox, with its key outside PostgreSQL, and purged after delivery or expiry; never store plaintext tokens in ordinary payloads or logs.
 - Do not log Authorization headers, tokens, passwords, signed URLs or sensitive financial payloads.
 - Rate-limit login, reset, invitation exchange, guest RSVP and email send requests.
 - Return 404 for inaccessible cross-wedding resources where existence disclosure would be harmful.
@@ -263,7 +268,7 @@ Public invitations must not leak tokens through analytics, referrer headers, log
 
 Required locally and in deployed environments from day one. Recommended uses:
 
-- Refresh-session families/revocation.
+- Spring Session storage, expiry, and revocation.
 - Rate limiting / abuse protection.
 - Idempotency keys and short-lived replay results.
 - Selective caching where proven valuable.
@@ -324,19 +329,22 @@ Implement `MailpitEmailSender` in local development and one production adapter (
 
 ```mermaid
 flowchart LR
-  A[Domain transaction] --> B[Durable publication / outbox]
+  A[Domain transaction] --> B[PostgreSQL email_outbox]
   B --> C[Email dispatcher]
   C --> D[Provider adapter]
   D --> E[Accepted / retry / permanently failed]
 ```
 
-- Persist delivery intent atomically with the state change it represents or through Modulith durable event publication.
+- Persist delivery intent atomically with its state change. Registration creates the user, verification-token record, and outbox entry in one PostgreSQL transaction.
+- Use one Spring Boot worker pipeline over `email_outbox`; do not also enqueue the same email through persistent Modulith publications, Redis, or a broker.
+- Claim work safely in short transactions, support multiple instances and expired-claim recovery, and record results only for the worker's valid claim. Send outside database transactions.
 - Retry transient errors with exponential backoff, bounded attempts and monitoring.
 - Never send network requests while keeping the booking/finance DB transaction open.
 - Do not consider provider API acceptance proof of inbox delivery; preserve provider message ID and status.
-- Duplicate queue deliveries must not result in uncontrolled duplicate email sending.
+- Delivery is at least once: a crash after provider acceptance can cause a retry. Use stable delivery identifiers and provider deduplication where available; do not promise exactly-once delivery.
+- Encrypt sensitive token/link material with a key outside PostgreSQL and purge it after delivery or expiry. Hash-only token records cannot reconstruct an old link; later send/resend behavior must explicitly handle token issue/rotation.
 
-Email-only notifications are part of MVP. WhatsApp/SMS is deferred.
+Email-only notifications are part of MVP. WhatsApp/SMS is deferred. [ADR-009](adr/ADR-009-email-outbox.md) records this decision. Milestone 0 prepares infrastructure only; implement the actual workflow with account registration/verification.
 
 ## 12. API design contract
 
@@ -378,7 +386,7 @@ Guidelines:
 
 - Reuse Figma-backed design tokens/components; support responsive layout and Light/Dark theme states.
 - Feature facades/stores own UI state; generated API clients own HTTP request typing.
-- Interceptors handle access-token attachment, coordinated single refresh, global error parsing and correlation IDs.
+- Planner HTTP infrastructure handles CSRF, session-expiry responses, global error parsing, and correlation IDs. Guest bearer attachment is separately scoped; there is no planner JWT refresh loop.
 - Do not render unauthorized finance/private task content; route guards are UX only, not authorization.
 - Guest website and RSVP are mobile-first and can use a distinct more expressive public presentation while sharing the visual brand.
 - Static prototypes are **not** production interactions or API integrations.
@@ -388,10 +396,10 @@ Guidelines:
 Recommended monorepo:
 
 ```text
-make-my-marriage/
+letsmarry/
 ├── frontend/                   # Angular application
 ├── backend/                    # Spring Boot modular monolith
-│   └── src/main/resources/db/migration/
+│   └── src/main/resources/db/migration/  # introduced in 0B; SQL added with features
 ├── infrastructure/
 │   ├── docker-compose.yml
 │   └── README.md
@@ -400,11 +408,13 @@ make-my-marriage/
 │   ├── 02-system-architecture.md
 │   ├── 03-database-design.md
 │   └── 04-api-design.md
-├── .github/workflows/
-│   ├── backend-ci.yml
-│   └── frontend-ci.yml
+├── .github/workflows/          # introduced in 0D
+│   └── ci.yml
+├── AGENTS.md
 └── README.md
 ```
+
+This is the intended layout as stages are implemented, not a claim that applications already exist. In 0A, use directory READMEs only. Preserve the existing repository/history. See the [development plan](05-development-plan.md) for 0A–0D gates and version selections.
 
 Local Docker Compose:
 
@@ -417,7 +427,7 @@ Define environment-specific app configurations (`local`, `staging`, `production`
 
 ## 15. Deployment strategy (deferred)
 
-Build Docker images now; do not prematurely require Kubernetes for local development. When ready, compare:
+Build Docker images in Stage 0D; do not prematurely require Kubernetes for local development. When ready, compare:
 
 | Option | Benefits | Considerations |
 |---|---|---|
@@ -446,14 +456,15 @@ Later: OpenTelemetry distributed context, Prometheus collection, Grafana dashboa
 | Domain unit | Ownership invariants, permission resolution, payment/status math |
 | Controller/API | Spring MVC/MockMvc, DTO validation, Problem Details |
 | Persistence integration | Testcontainers PostgreSQL, Flyway rebuilds, indexes and constraints |
-| Redis integration | Token revocation, idempotency, rate limit |
-| Spring Modulith | Dependency verification, application event/publication tests |
+| Redis integration | Session expiry/revocation, CSRF/session behavior, transient idempotency, rate limit |
+| Spring Modulith | Dependency verification and module interaction tests |
+| Email outbox | Atomic delivery intent, worker claiming/recovery, retries, deduplication and payload protection |
 | Security | IDOR, wrong wedding, missing permission, token replay, owner takeover attempts |
 | Angular unit/component | Form validation, guards, API-client error states, private data gating |
 | Playwright E2E | Register → wedding create → owner invite → task/guest/RSVP → expense/payment |
 | Operational smoke | Health, DB migration readiness, email stub, signed URL path |
 
-**Critical scenarios:** concurrent owner claims; concurrent expense edits; refresh-token reuse; invalidated invitations; event-specific RSVP; private finance visibility; duplicate payment key; soft delete filtering; upload linking across weddings.
+**Critical scenarios:** concurrent owner claims; concurrent expense edits; session revocation and CSRF rejection; invalidated invitations; event-specific RSVP; private finance visibility; duplicate payment key; soft delete filtering; upload linking across weddings.
 
 ## 18. Architectural decision records (ADRs)
 
@@ -465,18 +476,19 @@ Later: OpenTelemetry distributed context, Prometheus collection, Grafana dashboa
 | ADR-004 | PostgreSQL, shared schema, wedding ID isolation | Accepted |
 | ADR-005 | Flyway-only schema evolution, Hibernate validate | Accepted |
 | ADR-006 | Redis from day one | Accepted |
-| ADR-007 | Short access JWT + rotating refresh session | Provisional; compare Spring Session alternative |
+| [ADR-007](adr/ADR-007-redis-sessions.md) | Spring Session + Redis with HttpOnly cookie and CSRF | Accepted; replaces provisional planner JWT/refresh |
 | ADR-008 | Private object storage with short-lived signed URLs | Accepted |
-| ADR-009 | Provider-neutral email + durable outbox | Accepted |
+| [ADR-009](adr/ADR-009-email-outbox.md) | Provider-neutral email + one PostgreSQL transactional outbox | Accepted |
 | ADR-010 | Docker Compose local + GitHub Actions CI | Accepted |
 | ADR-011 | Cloud host and India region | Deferred |
 | ADR-012 | Kubernetes/AKS and Infrastructure as Code | Deferred |
 | ADR-013 | No AI, subscriptions or WebSockets in MVP | Accepted |
+| [ADR-014](adr/ADR-014-wedding-membership.md) | Wedding and membership together initially, atomic creator membership | Accepted |
 
 ## 19. Implementation order
 
-1. Repo, Docker Compose, PostgreSQL/Redis/Mailpit, Flyway, CI.
-2. Identity/auth/security, Wedding/CoupleProfile/Membership modules.
+1. **Milestone 0:** 0A repository/docs; 0B backend, Gradle, PostgreSQL/Redis/Mailpit and Flyway; 0C Angular routing/tokens/theme shell; 0D tests, GitHub Actions, Dockerfiles and final verification. Check and summarize each stage; obtain approval before the next. No business features, commits, or pushes are implicitly authorized.
+2. Identity/auth/security and then wedding creation, couple profiles and initial membership inside the wedding module.
 3. Owner invitation acceptance, authorization and audit baseline.
 4. Events and tasks; dashboard starter metrics.
 5. Guest/household/event assignments, invitation links and public RSVP.
@@ -486,10 +498,9 @@ Later: OpenTelemetry distributed context, Prometheus collection, Grafana dashboa
 
 ## 20. Open engineering questions
 
-- Choose JWT refresh model or Spring Session before implementing login.
-- Exact Redis refresh/idempotency key TTLs and atomic operations.
+- Exact session timeouts, account-security invalidation behavior, and Redis transient-idempotency TTLs/atomic operations.
 - Owner recovery/transfer and creator privileges after both owners join.
-- Persistent outbox design: Spring Modulith publications versus dedicated `email_outbox` (avoid duplicating the same work twice).
+- Outbox worker lease/retry details, delivery deduplication, encryption-key lifecycle, and payload retention within the accepted single-pipeline design.
 - Guest token lifetime, revocation and changing RSVPs after cutoff.
 - Private task visibility rules for admin/owner, assignment and task creation.
 - Refund/overpayment representation, expense cancellation, exchange-rate policy (MVP likely INR-only).

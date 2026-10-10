@@ -1,0 +1,131 @@
+:root {
+  color-scheme: light;
+
+  /* Figma primitive colors */
+  --coral-50: #fff1f0;
+  --coral-100: #ffe2df;
+  --coral-200: #ffc9c3;
+  --coral-300: #ffaca4;
+  --coral-400: #ff8580;
+  --coral-500: #ff6b6b;
+  --coral-600: #eb5264;
+  --coral-700: #c93b55;
+  --coral-800: #a62d49;
+  --lilac-50: #f7f3ff;
+  --lilac-100: #eee6ff;
+  --lilac-200: #dcceff;
+  --lilac-300: #c5affc;
+  --lilac-400: #a78bfa;
+  --lilac-500: #9474ee;
+  --lilac-600: #7c52d6;
+  --lilac-700: #663eb6;
+  --mint-50: #f0fff8;
+  --mint-100: #dafaec;
+  --mint-200: #aff0d4;
+  --mint-300: #81e3bf;
+  --mint-400: #52ceaa;
+  --mint-600: #137d5a;
+  --ink-950: #131323;
+  --ink-900: #202033;
+  --ink-800: #2d2e46;
+  --ink-700: #43445d;
+  --ink-500: #76778d;
+  --ink-300: #b8b8ca;
+  --ink-200: #dadae7;
+  --ink-100: #edecf4;
+  --ink-50: #f7f6fb;
+  --warm-white: #ffffff;
+  --warm-ivory: #fff8f3;
+  --warm-peach: #fff0e6;
+  --warm-rose: #ffedef;
+  --status-success: #137d5a;
+  --status-warning: #b66520;
+  --status-danger: #c32d50;
+  --status-info: #4d64d8;
+
+  /* Figma semantic color mode: Light */
+  --bg-canvas: var(--warm-ivory);
+  --bg-surface: var(--warm-white);
+  --bg-surface-raised: var(--ink-50);
+  --bg-subtle: var(--warm-peach);
+  --bg-brand: var(--coral-700);
+  --bg-brand-hover: var(--coral-800);
+  --bg-brand-soft: var(--coral-50);
+  --bg-lilac-soft: var(--lilac-50);
+  --bg-mint-soft: var(--mint-50);
+  --text-primary: var(--ink-950);
+  --text-secondary: var(--ink-700);
+  --text-muted: var(--ink-500);
+  --text-inverse: var(--warm-white);
+  --text-brand: var(--coral-700);
+  --text-lilac: var(--lilac-700);
+  --text-success: var(--mint-600);
+  --border-default: var(--ink-200);
+  --border-strong: var(--ink-300);
+  --border-focus: var(--lilac-600);
+  --semantic-success: var(--status-success);
+  --semantic-warning: var(--status-warning);
+  --semantic-danger: var(--status-danger);
+  --semantic-info: var(--status-info);
+  --shadow-soft: 0 1.25rem 3.75rem rgba(19, 19, 35, 0.08);
+
+  /* Figma spacing scale */
+  --space-0: 0;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+
+  /* Figma radius scale */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-xxl: 2rem;
+  --radius-pill: 62.4375rem;
+
+  /* Figma typography scale */
+  --font-caption: 0.75rem;
+  --font-small: 0.875rem;
+  --font-body: 1rem;
+  --font-h3: 1.25rem;
+  --font-h2: 1.5rem;
+  --font-h1: 2rem;
+  --font-display: 2.75rem;
+  --font-hero: 3.75rem;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-canvas: var(--ink-950);
+  --bg-surface: var(--ink-900);
+  --bg-surface-raised: var(--ink-800);
+  --bg-subtle: var(--ink-800);
+  --bg-brand: var(--coral-500);
+  --bg-brand-hover: var(--coral-400);
+  --bg-brand-soft: var(--ink-800);
+  --bg-lilac-soft: var(--ink-800);
+  --bg-mint-soft: var(--ink-800);
+  --text-primary: var(--warm-white);
+  --text-secondary: var(--ink-300);
+  --text-muted: var(--ink-300);
+  --text-inverse: var(--ink-950);
+  --text-brand: var(--coral-200);
+  --text-lilac: var(--lilac-300);
+  --text-success: var(--mint-300);
+  --border-default: var(--ink-700);
+  --border-strong: var(--ink-500);
+  --border-focus: var(--lilac-400);
+  --semantic-success: var(--mint-300);
+  --semantic-warning: var(--warm-peach);
+  --semantic-danger: var(--coral-200);
+  --semantic-info: var(--lilac-300);
+  --shadow-soft: 0 1.25rem 3.75rem rgba(0, 0, 0, 0.24);
+}

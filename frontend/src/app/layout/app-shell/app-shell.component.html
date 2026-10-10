@@ -1,0 +1,113 @@
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
+<div class="app-shell">
+  @if (mobileNavOpen()) {
+    <button
+      class="navigation-backdrop"
+      type="button"
+      aria-label="Close navigation"
+      (click)="closeNavigation()"
+    ></button>
+  }
+
+  <aside
+    id="primary-navigation"
+    class="sidebar"
+    [class.is-open]="mobileNavOpen()"
+    [attr.inert]="!isDesktop() && !mobileNavOpen() ? '' : null"
+    aria-label="Primary navigation"
+  >
+    <a class="brand" routerLink="/foundation" (click)="closeNavigation()">
+      <span class="brand-mark" aria-hidden="true">
+        <span></span>
+        <span></span>
+      </span>
+      <span>
+        <strong>Make My Marriage</strong>
+        <small>Design foundation</small>
+      </span>
+    </a>
+
+    <div class="nav-label">Explore</div>
+    <nav>
+      <a
+        routerLink="/foundation"
+        routerLinkActive="is-active"
+        ariaCurrentWhenActive="page"
+        (click)="closeNavigation()"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 5.5h16v13H4zM8 9h8M8 13h5" />
+        </svg>
+        Foundation
+      </a>
+      <a
+        routerLink="/design-tokens"
+        routerLinkActive="is-active"
+        ariaCurrentWhenActive="page"
+        (click)="closeNavigation()"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 4v16M4 12h16" />
+        </svg>
+        Design tokens
+      </a>
+    </nav>
+
+    <div class="stage-card">
+      <span class="stage-dot" aria-hidden="true"></span>
+      <div>
+        <strong>Milestone 0C</strong>
+        <span>Angular foundation</span>
+      </div>
+    </div>
+  </aside>
+
+  <div class="page-column">
+    <header class="topbar">
+      <button
+        class="icon-button menu-button"
+        type="button"
+        [attr.aria-expanded]="mobileNavOpen()"
+        aria-controls="primary-navigation"
+        aria-label="Open navigation"
+        (click)="toggleNavigation()"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      </button>
+
+      <div class="mobile-brand">mmm<span>.</span></div>
+
+      <button
+        class="theme-button"
+        type="button"
+        [attr.aria-label]="themeActionLabel()"
+        [attr.title]="themeActionLabel()"
+        [attr.aria-pressed]="themeService.theme() === 'dark'"
+        (click)="themeService.toggle()"
+      >
+        @if (themeService.theme() === 'light') {
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"
+            />
+            <circle cx="12" cy="12" r="4" />
+          </svg>
+          <span>Light</span>
+        } @else {
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 15.5A8 8 0 0 1 8.5 4 8 8 0 1 0 20 15.5Z" />
+          </svg>
+          <span>Dark</span>
+        }
+      </button>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <router-outlet />
+    </main>
+  </div>
+</div>
