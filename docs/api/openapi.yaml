@@ -1,0 +1,266 @@
+openapi: 3.0.3
+info:
+  title: Make My Marriage API
+  version: 1.0.0-1a
+  description: Milestone 1A local/test registration contract. Other account endpoints are not implemented.
+servers:
+  - url: /api/v1
+paths:
+  /auth/csrf:
+    get:
+      tags: [Registration]
+      operationId: getRegistrationCsrf
+      summary: Create an anonymous session and obtain its CSRF token
+      description: >-
+        Available only when app.registration.enabled is true. The browser must retain the
+        HttpOnly SESSION cookie and send the returned token in the named header on registration.
+        The response must not be cached. This session does not authenticate the user.
+      security: []
+      responses:
+        '200':
+          description: CSRF token and anonymous session cookie
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            Set-Cookie:
+              description: HttpOnly SESSION cookie; Secure over HTTPS, local HTTP exception only.
+              schema:
+                type: string
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsrfResponse'
+              example:
+                token: opaque-csrf-token
+                headerName: X-CSRF-TOKEN
+        '404':
+          description: Registration gate is disabled, so the endpoint is absent.
+  /auth/register:
+    post:
+      tags: [Registration]
+      operationId: registerUser
+      summary: Create an unverified account
+      description: >-
+        Available only when app.registration.enabled is true. Requires an anonymous SESSION
+        cookie and its CSRF token. Creates only the user record; no email, login session,
+        wedding, or ownership is created in Milestone 1A.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequest'
+            example:
+              displayName: Anjali
+              email: anjali@example.com
+              password: SecurePassword123!
+      responses:
+        '201':
+          description: Unverified user created; no authenticated session is established.
+          headers:
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationResponse'
+              example:
+                id: 0199d4ee-26ad-7000-9000-000000000001
+                displayName: Anjali
+                email: anjali@example.com
+                emailVerified: false
+        '400':
+          $ref: '#/components/responses/MalformedJson'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '409':
+          $ref: '#/components/responses/DuplicateEmail'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: Registration gate is disabled, so the endpoint is absent.
+components:
+  securitySchemes:
+    anonymousSession:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: Anonymous Spring Session cookie returned by GET /auth/csrf.
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-TOKEN
+      description: Token returned by GET /auth/csrf for the same SESSION cookie.
+  headers:
+    CorrelationId:
+      description: Server-generated request correlation ID.
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    CsrfResponse:
+      type: object
+      additionalProperties: false
+      required: [token, headerName]
+      properties:
+        token:
+          type: string
+          description: Opaque, session-bound CSRF token.
+        headerName:
+          type: string
+          enum: [X-CSRF-TOKEN]
+    RegistrationRequest:
+      type: object
+      additionalProperties: true
+      required: [displayName, email, password]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 150
+          description: Trimmed before validation and storage.
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Trimmed and lowercased before validation and storage.
+        password:
+          type: string
+          format: password
+          minLength: 15
+          maxLength: 128
+          description: >-
+            Length is measured in Unicode code points after NFC normalization. Spaces are
+            retained; control characters are rejected. No character-composition rule applies.
+    RegistrationResponse:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, email, emailVerified]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Application-generated UUIDv7.
+        displayName:
+          type: string
+        email:
+          type: string
+          format: email
+        emailVerified:
+          type: boolean
+          enum: [false]
+    FieldError:
+      type: object
+      required: [field, code, message]
+      properties:
+        field:
+          type: string
+        code:
+          type: string
+          example: INVALID_FIELD
+        message:
+          type: string
+    Problem:
+      type: object
+      required: [type, title, status, detail, instance, code, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+        correlationId:
+          type: string
+          format: uuid
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+  responses:
+    MalformedJson:
+      description: Invalid JSON request body.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/malformed-json
+            title: Bad Request
+            code: MALFORMED_JSON
+            status: 400
+            detail: Request body is not valid JSON.
+            instance: /api/v1/auth/register
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+    CsrfInvalid:
+      description: Missing or invalid session-bound CSRF token.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/csrf-invalid
+            title: Forbidden
+            code: CSRF_INVALID
+            status: 403
+            detail: A valid CSRF token is required.
+            instance: /api/v1/auth/register
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+    DuplicateEmail:
+      description: An account already uses this email, regardless of case.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/email-already-registered
+            title: Conflict
+            code: EMAIL_ALREADY_REGISTERED
+            status: 409
+            detail: An account with this email already exists.
+            instance: /api/v1/auth/register
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+    ValidationError:
+      description: Valid JSON with invalid registration fields.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/validation-error
+            title: Unprocessable Content
+            code: VALIDATION_ERROR
+            status: 422
+            detail: Invalid registration fields.
+            instance: /api/v1/auth/register
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+            errors:
+              - field: password
+                code: INVALID_FIELD
+                message: Use 15 to 128 characters without control characters.

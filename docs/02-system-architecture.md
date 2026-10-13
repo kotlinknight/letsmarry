@@ -2,7 +2,8 @@
 
 **Status:** MVP architecture baseline  
 **Version:** 1.0  
-**Last consolidated:** 2026-10-10  
+**Last updated:** 2026-10-13
+
 **Architectural style:** Spring Boot modular monolith, enforced by Spring Modulith  
 **Frontend:** Angular single-page application  
 **API:** Versioned REST (`/api/v1`)  
@@ -104,7 +105,7 @@ Each module owns its application services, domain model, persistence and public 
 
 Initially, `wedding` includes creation, couple profiles, membership, and permissions in separated internal packages. Keep identity independent of wedding-specific roles. Create the wedding and its initial membership synchronously in one PostgreSQL transaction; asynchronous events must not create the initial owner/admin. See [ADR-014](adr/ADR-014-wedding-membership.md).
 
-Illustrative future layout; add business packages only with their first feature:
+The `identity` and `platform` packages now exist; the remaining business packages below are illustrative future structure. Add them only with their first feature:
 
 ```text
 backend/src/main/java/com/makemymarriage/
@@ -134,6 +135,8 @@ backend/src/main/java/com/makemymarriage/
 ```
 
 The module API should be small and stable. Public interfaces may include use-case services and immutable data records; implementation packages should be inaccessible outside their module where practicable.
+
+Milestone 1A adds registration within `identity`: `api` owns HTTP DTOs, controller, and registration errors; `application` owns the transactional use case and password policy; `domain` owns the user JPA model and account status; `infrastructure` owns Spring Data persistence and the versioned PBKDF2 encoder. `platform` retains shared security and correlation-ID behavior. Registration saves only an unverified user and does not establish an authenticated session or wedding membership. It is available only with the local/test registration opt-in until verification and signup safeguards arrive in 1B. See the [1A implementation note](implementation/milestone-1a-user-registration.md).
 
 ### Spring Modulith
 
@@ -335,7 +338,7 @@ flowchart LR
   D --> E[Accepted / retry / permanently failed]
 ```
 
-- Persist delivery intent atomically with its state change. Registration creates the user, verification-token record, and outbox entry in one PostgreSQL transaction.
+- Persist delivery intent atomically with its state change. From Milestone 1B onward, registration creates the user, verification-token record, and outbox entry in one PostgreSQL transaction. The local/test-only 1A exception creates only the unverified user; see [ADR-009](adr/ADR-009-email-outbox.md).
 - Use one Spring Boot worker pipeline over `email_outbox`; do not also enqueue the same email through persistent Modulith publications, Redis, or a broker.
 - Claim work safely in short transactions, support multiple instances and expired-claim recovery, and record results only for the worker's valid claim. Send outside database transactions.
 - Retry transient errors with exponential backoff, bounded attempts and monitoring.
@@ -344,7 +347,7 @@ flowchart LR
 - Delivery is at least once: a crash after provider acceptance can cause a retry. Use stable delivery identifiers and provider deduplication where available; do not promise exactly-once delivery.
 - Encrypt sensitive token/link material with a key outside PostgreSQL and purge it after delivery or expiry. Hash-only token records cannot reconstruct an old link; later send/resend behavior must explicitly handle token issue/rotation.
 
-Email-only notifications are part of MVP. WhatsApp/SMS is deferred. [ADR-009](adr/ADR-009-email-outbox.md) records this decision. Milestone 0 prepares infrastructure only; implement the actual workflow with account registration/verification.
+Email-only notifications are part of MVP. WhatsApp/SMS is deferred. [ADR-009](adr/ADR-009-email-outbox.md) records this decision. Milestone 1A does not send email; verification and delivery begin in Milestone 1B.
 
 ## 12. API design contract
 

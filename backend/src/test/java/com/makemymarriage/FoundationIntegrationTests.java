@@ -1,6 +1,10 @@
 package com.makemymarriage;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -20,6 +24,8 @@ import org.springframework.session.data.redis.RedisSessionRepository;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -61,6 +67,7 @@ class FoundationIntegrationTests {
   @Autowired SessionRepository<? extends Session> sessions;
 
   @Autowired Environment environment;
+  @Autowired WebApplicationContext webApplicationContext;
 
   private final HttpClient client =
       HttpClient.newBuilder()
@@ -118,16 +125,30 @@ class FoundationIntegrationTests {
   }
 
   @Test
-  void flywayInitializesAndValidatesWithoutBusinessTables() {
+  void flywayCreatesAndValidatesTheFirstIdentityTable() {
     assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
-    assertThat(flyway.info().all()).isEmpty();
+    assertThat(flyway.info().all()).hasSize(1);
     assertThat(
             jdbc.queryForList(
                 "select table_name from information_schema.tables where table_schema = 'public'",
                 String.class))
-        .containsExactly("flyway_schema_history");
+        .containsExactlyInAnyOrder("flyway_schema_history", "users");
     assertThat(environment.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
     assertThat(jdbc.queryForObject("show timezone", String.class)).isEqualTo("UTC");
+  }
+
+  @Test
+  void registrationEndpointsAreAbsentWithoutTheLocalOptIn() throws Exception {
+    assertThat(get("/api/v1/auth/csrf").statusCode()).isEqualTo(404);
+    MockMvcBuilders.webAppContextSetup(webApplicationContext)
+        .apply(springSecurity())
+        .build()
+        .perform(
+            post("/api/v1/auth/register")
+                .with(csrf())
+                .contentType("application/json")
+                .content("{}"))
+        .andExpect(status().isNotFound());
   }
 
   @Test

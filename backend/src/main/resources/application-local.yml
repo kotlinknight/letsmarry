@@ -13,3 +13,7 @@ server:
     session:
       cookie:
         secure: false
+
+app:
+  registration:
+    enabled: true

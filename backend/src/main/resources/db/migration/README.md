@@ -1,13 +1,13 @@
 # Database migrations
 
 Flyway scans this directory at startup and manages its own schema-history table.
-There are no business migrations in Milestone 0B. A zero-migration validation is
-expected; the first real schema change will arrive with the account feature.
+`V1__create_users.sql` is the first business migration. It creates the identity
+user table and case-insensitive unique email index for Milestone 1A.
 
 Add immutable `V<number>__description.sql` files in implementation order. Never
 edit a migration that has been shared. Hibernate validates the schema and must
 not generate it. Automatic baselining and Flyway clean are disabled.
 
-The foundation test checks startup and validation on a fresh PostgreSQL instance,
-with only Flyway's history table present. Schema evolution tests follow when
-actual migrations exist.
+The integration tests check startup and validation on fresh PostgreSQL instances,
+with the Flyway history and `users` tables present. Future schema changes must
+append migrations and preserve existing data.

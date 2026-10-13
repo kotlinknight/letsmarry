@@ -2,7 +2,8 @@
 
 **Status:** MVP logical schema design  
 **Version:** 1.0  
-**Last consolidated:** 2026-10-10  
+**Last updated:** 2026-10-13
+
 **Database:** PostgreSQL  
 **Migrations:** Flyway  
 **Persistence:** Spring Data JPA/Hibernate (`ddl-auto=validate`)  
@@ -81,6 +82,8 @@ version     BIGINT NOT NULL DEFAULT 0
 ## 4. Table catalog — Identity and security
 
 ### `users`
+
+**Implemented in Milestone 1A:** [`V1__create_users.sql`](../backend/src/main/resources/db/migration/V1__create_users.sql). This is currently the only business table. `email_verified_at` is null at registration, while `status` starts as `ACTIVE`; later login must also require verified email. `phone` is stored as nullable but is not accepted by the 1A registration request. Timestamps are `TIMESTAMPTZ NOT NULL DEFAULT now()`, and `version` is `BIGINT NOT NULL DEFAULT 0`. The migration enforces the status set and a case-insensitive unique index. There is no soft-delete column or wedding relationship on `users`.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -353,7 +356,7 @@ Public reads must filter to published/allowed content and prevent unintended ind
 
 `id PK`, optional `wedding_id FK`, `recipient_email`, `template_code`, `payload JSONB` (non-secret template data), `status` (`PENDING`,`PROCESSING`,`SENT`,`FAILED`), `attempt_count`, `next_attempt_at`, `provider_message_id`, `last_error` (redacted), `created_at`, `sent_at`.
 
-**Accepted:** this table is the sole durable email work source; do not add a duplicate Spring Modulith persistent publication pipeline. Registration must insert its user, verification-token record, and outbox entry atomically. See [ADR-009](adr/ADR-009-email-outbox.md).
+**Accepted future behavior:** this table is the sole durable email work source; do not add a duplicate Spring Modulith persistent publication pipeline. Starting in Milestone 1B, registration must insert its user, verification-token record, and outbox entry atomically. The 1A local/test-only exception creates only an unverified user. See [ADR-009](adr/ADR-009-email-outbox.md).
 
 Refine the schema with worker-claim/lease metadata, stable delivery/deduplication identity, encrypted sensitive payload and key-version metadata, and expiry/purge support when implementing the account milestone. Keep encryption keys outside PostgreSQL. Do not place raw tokens in ordinary JSON payloads, logs, or audit records. The worker sends outside database transactions, safely reclaims expired work, retries with bounded exponential backoff, and records provider results. At-least-once delivery may produce duplicates after a crash; it is not an exactly-once guarantee.
 
@@ -403,7 +406,7 @@ PostgreSQL `pg_trgm` and/or full-text indexes can support `q` search on guest na
 
 ```text
 backend/src/main/resources/db/migration/
-V001__create_users.sql
+V1__create_users.sql               # implemented in Milestone 1A
 V002__create_auth_tokens.sql
 V003__create_weddings.sql
 V004__create_couple_profiles.sql
@@ -434,7 +437,7 @@ V028__create_audit_log.sql
 V029__create_indexes.sql
 ```
 
-These are **illustrative** names/order, not migrations to generate during Milestone 0. Add schema changes with each implemented feature and number them in that actual order. Account verification needs its outbox before wedding features; introduce any optional wedding association only when its referenced table exists. Audit tables likewise arrive with the first audited feature. Once migrations are shared, append new versions rather than renumbering or editing them.
+Only `V1__create_users.sql` above exists. The remaining names and order are **illustrative**, not migrations to generate now. Add schema changes with each implemented feature and number them in actual order. Account verification needs its outbox before wedding features; introduce any optional wedding association only when its referenced table exists. Audit tables likewise arrive with the first audited feature. Once migrations are shared, append new versions rather than renumbering or editing them.
 
 Example application config:
 

@@ -2,13 +2,14 @@
 
 **Status:** MVP endpoint contract baseline  
 **Version:** 1.0  
-**Last consolidated:** 2026-10-10  
+**Last updated:** 2026-10-13
+
 **Base path:** `/api/v1`  
 **Backend:** Spring Boot + Spring Security  
 **Frontend:** Angular + generated/typed OpenAPI client  
 **Format:** JSON, RFC 9457 Problem Details for errors
 
-> This is an API **design document**, not yet a machine-readable OpenAPI YAML file or a deployed Swagger endpoint. Formalize each implemented business slice in `docs/api/openapi.yaml` before its controllers; do not generate the entire future API during Milestone 0.
+> This is the broader MVP API **design document**. The implemented Milestone 1A endpoints have a machine-readable [OpenAPI 3.0.3 contract](api/openapi.yaml); other catalog entries remain plans, not deployed endpoints.
 
 ## 1. API principles
 
@@ -58,7 +59,7 @@ Cookie: SESSION=<opaque-session-id>
 
 - Spring Session stores planner sessions in Redis. The browser sends an opaque HttpOnly session cookie; Angular cannot read the session credential.
 - Use `Secure` cookies under deployed HTTPS, deliberate `SameSite` settings, trusted-origin checks, and CSRF protection for cookie-authenticated writes. Local HTTP exceptions are local-only.
-- Bootstrap CSRF state before protected writes and obtain a fresh CSRF token after login/logout. Cookie/header names and bootstrap endpoint details will be formalized in the account OpenAPI contract; `SESSION` above is illustrative.
+- Milestone 1A implements `GET /auth/csrf`: it creates an anonymous Redis-backed `SESSION` cookie and returns `{ "token": "...", "headerName": "X-CSRF-TOKEN" }` with `Cache-Control: no-store`. Send the cookie and header together for registration. Re-bootstrap after future login/logout; those flows remain unimplemented.
 - Login establishes the session; `/users/me` restores identity after page reload. Expired/invalid sessions return `401`; Angular handles reauthentication without a JWT refresh/retry loop.
 - [ADR-007](adr/ADR-007-redis-sessions.md) is accepted. Planner access/refresh JWTs and `/auth/refresh` are removed from the design.
 
@@ -74,7 +75,8 @@ Cookie: SESSION=<opaque-session-id>
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/auth/register` | Register account |
+| GET | `/auth/csrf` | **Implemented 1A:** anonymous CSRF/session bootstrap |
+| POST | `/auth/register` | **Implemented 1A:** local/test-only unverified account registration |
 | POST | `/auth/login` | Login; establish Redis-backed session cookie and return user |
 | POST | `/auth/logout` | Invalidate server session and clear cookie |
 | POST | `/auth/email/verify` | Verify email using secure token |
@@ -88,7 +90,10 @@ Example register:
 POST /api/v1/auth/register
 Content-Type: application/json
 
-{"displayName":"Anjali","email":"anjali@example.com","password":"..."}
+Cookie: SESSION=<anonymous-session-id>
+X-CSRF-TOKEN: <token-from-GET-auth-csrf>
+
+{"displayName":"Anjali","email":"anjali@example.com","password":"SecurePassword123!"}
 ```
 
 Response `201 Created`:
@@ -101,6 +106,8 @@ Response `201 Created`:
   "emailVerified": false
 }
 ```
+
+Registration requires both the `local` or `test` profile and `app.registration.enabled=true`; the default is false. The two endpoints are absent (`404`) when disabled. Registration trims the display name (1–150 characters) and lowercases/trims the email (valid address, at most 320 characters). The password is NFC-normalized without trimming, must contain 15–128 Unicode code points, and cannot contain control characters. No character-composition rule is imposed. The response does not include a `Location` header because no user-read endpoint exists yet. It creates an `ACTIVE` but unverified user, does not log them in, and does not send an email or create a wedding. `400` means malformed JSON, `422` invalid fields, `409` a duplicate email even with different case, and `403` a missing/invalid CSRF token. Each error is an RFC 9457 `application/problem+json` response with a stable `code`, server-generated `correlationId`, and matching `X-Correlation-ID` header. See the [OpenAPI contract](api/openapi.yaml) and [1A implementation note](implementation/milestone-1a-user-registration.md).
 
 Example login response:
 
@@ -122,7 +129,7 @@ Login sets the HttpOnly session cookie through `Set-Cookie`; it does not return 
 | 204 | Successful no-body operation |
 | 400 | Malformed request or input structure |
 | 401 | No/invalid authentication |
-| 403 | Authenticated but forbidden |
+| 403 | Forbidden, including a missing or invalid CSRF token |
 | 404 | Missing or undisclosable resource |
 | 409 | Business state/conflict (e.g. owner slot taken) |
 | 412 | `If-Match` precondition failed |
@@ -702,9 +709,9 @@ Planner HTTP infrastructure handles CSRF, session-expiry responses, correlation 
 
 ## 25. Implementation handoff and unresolved decisions
 
-For the first business API slice after Milestone 0, introduce `docs/api/openapi.yaml` (OpenAPI 3.0.3) with resolved DTO definitions, security schemes, parameter types, response examples and reusable error components. Expand it per feature. Resolve the following before the corresponding feature's code generation or implementation; they do not require business scaffolding during Milestone 0:
+The first business slice now has `docs/api/openapi.yaml` (OpenAPI 3.0.3) with registration and CSRF contracts. Expand it per feature. Resolve the following before the corresponding feature's code generation or implementation:
 
-- Session timeout/invalidation policy, CSRF bootstrap endpoint, and final cookie/header names under accepted Redis Spring Session authentication.
+- Session timeout/invalidation policy and CSRF renewal after future login/logout under accepted Redis Spring Session authentication. The 1A bootstrap endpoint and cookie/header names are now defined.
 - Exact default role permission matrix.
 - Invitation expiration/response cutoff and guest access revocation behavior.
 - Payment refunds/overpayments and idempotency persistence.

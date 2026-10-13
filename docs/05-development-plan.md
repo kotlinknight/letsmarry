@@ -1,8 +1,8 @@
 # Make My Marriage — Development Plan
 
-**Status:** Milestone 0 complete (Stages 0A–0D); Milestone 1 awaits approval
+**Status:** Milestone 0 complete (Stages 0A–0D); Milestone 1A registration complete, pending review
 
-**Last updated:** 2026-10-10
+**Last updated:** 2026-10-13
 
 ## 1. Delivery boundaries
 
@@ -28,7 +28,7 @@ At 0A, no application commands were available. Stage 0B adds backend and Compose
 - Spring Session with Redis replaces the provisional planner JWT/refresh-token design. Use an HttpOnly session cookie, CSRF protection, and a same-origin frontend/API topology.
 - Keep identity independent of wedding-specific roles. Initially place wedding creation, couple profiles, membership, and permissions inside the `wedding` Modulith module with separated internal packages.
 - Commit wedding creation and initial creator membership synchronously in one PostgreSQL transaction. A verified bride/groom creator self-declares the corresponding owner role; a family/friend creator becomes setup ADMIN.
-- Use one PostgreSQL transactional email outbox. Registration will commit the user, verification-token record, and outbox entry atomically; a worker sends afterward.
+- Use one PostgreSQL transactional email outbox. Milestone 1A registration creates only an unverified user under a local/test-only feature gate. From 1B onward, registration will commit the user, verification-token record, and outbox entry atomically; a worker sends afterward. See [ADR-009](adr/ADR-009-email-outbox.md).
 - Token tables store hashes. Temporarily encrypted outbox token material is permitted for delivery retries; keep its key outside PostgreSQL and purge the material after delivery or expiry.
 - Use Figma semantic tokens, custom standalone Angular controls, CDK where needed, Reactive Forms, and Signals/RxJS.
 - Keep business authorization, private-task visibility, and same-wedding relationships enforced by the backend.
@@ -120,6 +120,8 @@ Defer production email/storage SDKs, UUIDv7 support until the first entity, API 
 
 The first useful end-to-end slice spans milestones 1 and 2: register → verify email → log in → create a wedding → reach its empty dashboard.
 
+Milestone 1 is delivered in separately approved stages: **1A** user registration and the first `users` migration; **1B** email verification, token storage, PostgreSQL outbox, and Mailpit delivery; **1C** login/logout with Redis sessions and CSRF renewal; **1D** current-user and password-recovery APIs, rate limiting, and account-lifecycle integration checks. The 1A API is intentionally local/test-only and does not send email or authenticate users. Any retained 1A accounts need a deliberate verification path in 1B without database reset.
+
 ## 6. Decisions still open
 
 Resolve each before its feature is implemented; none requires speculative business implementation in Milestone 0.
@@ -193,3 +195,11 @@ Verification completed:
 - Documentation links and whitespace checks passed. The original four baseline documents were not changed during 0D. Git history and the index were preserved; no commit, push, deployment, database reset, or volume deletion occurred.
 
 A literal clean Git clone was not created because Stages 0A–0D remain uncommitted in the preserved worktree. Clean npm installation and isolated Docker build contexts verified locked reconstruction without copying local build output. Milestone 1 accounts and all other business features remain outside this completed milestone and require separate approval.
+
+## 11. Milestone 1A implementation record
+
+Completed locally on 2026-10-13. The first `users` Flyway migration and `identity` module implement unverified registration, versioned PBKDF2 password hashing, case-insensitive email uniqueness, and RFC 9457 errors. `GET /api/v1/auth/csrf` bootstraps an anonymous Redis session for the protected registration POST. Both endpoints require a `local` or `test` profile plus the registration flag; the flag is off by default. The [OpenAPI contract](api/openapi.yaml) describes only these two endpoints, and the [implementation note](implementation/milestone-1a-user-registration.md) records the security and schema choices.
+
+The accepted outbox decision is unchanged for production registration beginning in 1B. This explicitly temporary 1A flow stores only the unverified user in a PostgreSQL transaction. 1B must create token/outbox records atomically for future registrations and handle any retained 1A users without deleting them. Stages 1B–1D still require separate approval. No Angular account UI, login, verification email, outbox, or wedding behavior was added.
+
+Verification: the locked Gradle build and Spotless check passed; all 18 JUnit tests passed, including fresh PostgreSQL/Redis Testcontainers registration and foundation checks, concurrent email uniqueness, CSRF/session pairing, the production-profile gate, and Spring Modulith verification. OpenAPI YAML parsed, all 18 local `$ref` targets resolved, changed Markdown links resolved, and `git diff --check` passed. These checks used isolated test databases and did not reset the developer's Compose database. No commit or push was made during 1A.

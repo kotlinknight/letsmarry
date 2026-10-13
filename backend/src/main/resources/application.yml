@@ -55,3 +55,7 @@ management:
       group:
         readiness:
           include: readinessState,db,redis
+
+app:
+  registration:
+    enabled: false
