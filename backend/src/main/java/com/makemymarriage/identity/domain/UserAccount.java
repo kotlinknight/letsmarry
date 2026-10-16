@@ -73,4 +73,15 @@ public class UserAccount {
   public Instant getEmailVerifiedAt() {
     return emailVerifiedAt;
   }
+
+  public boolean canVerifyEmail() {
+    return status == UserStatus.ACTIVE && emailVerifiedAt == null;
+  }
+
+  public void verifyEmail(Instant verifiedAt) {
+    if (!canVerifyEmail()) {
+      throw new IllegalStateException("Account cannot verify email");
+    }
+    emailVerifiedAt = verifiedAt;
+  }
 }

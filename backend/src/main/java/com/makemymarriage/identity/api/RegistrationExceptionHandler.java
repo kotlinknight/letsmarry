@@ -2,6 +2,8 @@ package com.makemymarriage.identity.api;
 
 import com.makemymarriage.identity.application.DuplicateEmailException;
 import com.makemymarriage.identity.application.InvalidRegistrationException;
+import com.makemymarriage.identity.application.InvalidVerificationTokenException;
+import com.makemymarriage.identity.application.VerificationRateLimitException;
 import com.makemymarriage.platform.ApiProblems;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Comparator;
@@ -17,15 +19,33 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice(basePackageClasses = RegistrationController.class)
 class RegistrationExceptionHandler {
+  @ExceptionHandler(VerificationRateLimitException.class)
+  ResponseEntity<ProblemDetail> rateLimited(
+      VerificationRateLimitException exception, HttpServletRequest request) {
+    HttpStatus status =
+        exception.isUnavailable() ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.TOO_MANY_REQUESTS;
+    return response(
+        status,
+        ApiProblems.create(
+            request,
+            status,
+            exception.isUnavailable()
+                ? "VERIFICATION_TEMPORARILY_UNAVAILABLE"
+                : "VERIFICATION_RATE_LIMITED",
+            exception.isUnavailable()
+                ? "Verification is temporarily unavailable."
+                : "Too many requests. Try again later."));
+  }
+
   @ExceptionHandler(MethodArgumentNotValidException.class)
   ResponseEntity<ProblemDetail> invalidFields(
       MethodArgumentNotValidException exception, HttpServletRequest request) {
+    String detail =
+        request.getRequestURI().endsWith("/register")
+            ? "Invalid registration fields."
+            : "Invalid request fields.";
     var problem =
-        ApiProblems.create(
-            request,
-            HttpStatus.UNPROCESSABLE_CONTENT,
-            "VALIDATION_ERROR",
-            "Invalid registration fields.");
+        ApiProblems.create(request, HttpStatus.UNPROCESSABLE_CONTENT, "VALIDATION_ERROR", detail);
     problem.setProperty(
         "errors",
         exception.getBindingResult().getFieldErrors().stream()
@@ -71,6 +91,17 @@ class RegistrationExceptionHandler {
         HttpStatus.CONFLICT,
         ApiProblems.create(
             request, HttpStatus.CONFLICT, "EMAIL_ALREADY_REGISTERED", exception.getMessage()));
+  }
+
+  @ExceptionHandler(InvalidVerificationTokenException.class)
+  ResponseEntity<ProblemDetail> invalidVerificationToken(HttpServletRequest request) {
+    return response(
+        HttpStatus.BAD_REQUEST,
+        ApiProblems.create(
+            request,
+            HttpStatus.BAD_REQUEST,
+            "VERIFICATION_TOKEN_INVALID",
+            "This verification link is invalid or expired."));
   }
 
   @ExceptionHandler(HttpMessageNotReadableException.class)

@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { routes } from './app.routes';
@@ -6,7 +7,7 @@ import { routes } from './app.routes';
 describe('application routes', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
-      providers: [provideRouter(routes)],
+      providers: [provideHttpClient(), provideRouter(routes)],
     });
   });
 
@@ -23,6 +24,14 @@ describe('application routes', () => {
 
     expect(harness.routeNativeElement?.querySelector('h1')?.textContent).toContain(
       'Tokens that feel joyful',
+    );
+  });
+
+  it('renders the email-verification route without automatically submitting', async () => {
+    const harness = await RouterTestingHarness.create('/verify-email');
+
+    expect(harness.routeNativeElement?.querySelector('h1')?.textContent).toContain(
+      'Verify your email',
     );
   });
 });

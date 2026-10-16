@@ -138,6 +138,12 @@ The module API should be small and stable. Public interfaces may include use-cas
 
 Milestone 1A adds registration within `identity`: `api` owns HTTP DTOs, controller, and registration errors; `application` owns the transactional use case and password policy; `domain` owns the user JPA model and account status; `infrastructure` owns Spring Data persistence and the versioned PBKDF2 encoder. `platform` retains shared security and correlation-ID behavior. Registration saves only an unverified user and does not establish an authenticated session or wedding membership. It is available only with the local/test registration opt-in until verification and signup safeguards arrive in 1B. See the [1A implementation note](implementation/milestone-1a-user-registration.md).
 
+Stage 1B-A adds a hash-only verification-token table and internal identity lifecycle service. A 32-byte random secret is encoded for a future email link; only its SHA-256 digest is stored. Issuance locks the user, revokes an earlier active token, and persists a 24-hour replacement. Consumption locks the same user before its token, checks expiry and account eligibility, then sets `users.email_verified_at` and consumes the token in one transaction. `users.status` remains `ACTIVE`; it represents account standing, while the nullable verification timestamp represents email proof. Suspended and deactivated accounts cannot use the token service. Registration is unchanged in this stage and still creates only a user; no endpoint, outbox, sender, or worker exists. See the [1B-A implementation note](implementation/milestone-1b-a-verification-tokens.md).
+
+Stage 1B-B introduces the independent `notification` Modulith module. Its root package exposes `EmailOutbox` for transactional enqueue and `EmailSender` for provider adapters; `application` owns orchestration, `domain` maps the outbox row, and `infrastructure` owns encryption, persistence, SQL claiming, and scheduling configuration. The outbox requires an existing caller transaction, so Stage 1B-C can atomically insert user, token, and email intent. Sensitive JSON delivery data is AES-GCM encrypted with a key outside the database. A disabled-by-default worker is tested with a fake sender; a real adapter and live delivery are deferred. Registration still creates only the user. See the [1B-B implementation note](implementation/milestone-1b-b-email-outbox.md).
+
+Stage 1B-C connects `identity` to the public `notification.EmailOutbox` contract. Registration commits the user, hash-only verification token, and encrypted outbox job together. Verification and resend are gated local/test APIs with anonymous Redis-session CSRF. Resend serializes on the user row, revokes the old token, purges its pending job by purpose ID, and enqueues a replacement. A job already processing may still be sent with an invalidated link. The Angular confirmation page requires a click after stripping the fragment token from browser history. No sender is installed, so no email leaves the outbox yet. See the [1B-C implementation note](implementation/milestone-1b-c-registration-verification.md).
+
 ### Spring Modulith
 
 - Declare modules with explicit allowed dependencies.
@@ -318,15 +324,15 @@ Store approved external livestream URL and optional platform, event and enabled 
 
 ### Providers
 
-Define an interface such as:
+Stage 1B-B defines this provider-neutral port:
 
 ```java
 public interface EmailSender {
-    SendResult send(OutboundEmail message);
+    SendReceipt send(EmailDelivery delivery);
 }
 ```
 
-Implement `MailpitEmailSender` in local development and one production adapter (Resend, Brevo or other). Do not embed provider SDK calls throughout domain modules.
+Stage 1B-D implements `SmtpEmailSender` using Spring Boot's managed `JavaMailSender` and Mailpit locally. A different provider can replace this adapter later; no provider SDK is coupled to domain modules.
 
 ### Durable delivery
 
@@ -346,6 +352,7 @@ flowchart LR
 - Do not consider provider API acceptance proof of inbox delivery; preserve provider message ID and status.
 - Delivery is at least once: a crash after provider acceptance can cause a retry. Use stable delivery identifiers and provider deduplication where available; do not promise exactly-once delivery.
 - Encrypt sensitive token/link material with a key outside PostgreSQL and purge it after delivery or expiry. Hash-only token records cannot reconstruct an old link; later send/resend behavior must explicitly handle token issue/rotation.
+- Stage 1B-B implements the `email_outbox` schema, AES-GCM payload protection, short PostgreSQL `SKIP LOCKED` claim transactions, two-minute leases, stale-claim checks, five-attempt retry limit, and terminal payload purge. Stage 1B-C adds atomic registration and token-purpose cancellation. Stage 1B-D adds local/test-only SMTP delivery and a token-purpose eligibility check before sending. The scheduler is opt-in and never activates under `production`; a token revoked while SMTP is already in flight can still reach the inbox but cannot verify.
 
 Email-only notifications are part of MVP. WhatsApp/SMS is deferred. [ADR-009](adr/ADR-009-email-outbox.md) records this decision. Milestone 1A does not send email; verification and delivery begin in Milestone 1B.
 

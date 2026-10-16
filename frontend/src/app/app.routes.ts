@@ -27,6 +27,14 @@ export const routes: Routes = [
             (module) => module.DesignTokensComponent,
           ),
       },
+      {
+        path: 'verify-email',
+        title: 'Verify email | Make My Marriage',
+        loadComponent: () =>
+          import('./features/email-verification/verify-email.component').then(
+            (module) => module.VerifyEmailComponent,
+          ),
+      },
     ],
   },
   {

@@ -17,3 +17,8 @@ server:
 app:
   registration:
     enabled: true
+  email-outbox:
+    enabled: true
+  verification:
+    rate-limit:
+      enabled: true

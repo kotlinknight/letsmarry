@@ -1,6 +1,6 @@
 # Make My Marriage frontend
 
-This directory contains the Angular foundation from Milestones 0C and 0D. It provides a strict standalone application, lazy routing, a responsive application shell, reviewed Figma design tokens, persistent Light/Dark themes, automated lint and browser checks, and a production-style container image. It does not contain registration, login, wedding creation, dashboard data, or other business features.
+This directory contains the Angular foundation from Milestones 0C and 0D and the minimal Stage 1B-C email-verification confirmation page. It provides a strict standalone application, lazy routing, a responsive application shell, reviewed Figma design tokens, persistent Light/Dark themes, automated lint and browser checks, and a production-style container image. It does not contain registration, login, wedding creation, or dashboard data.
 
 ## Requirements
 
@@ -29,6 +29,7 @@ Available foundation routes:
 
 - `/foundation` — visual foundation, scope boundary, and scaffold status
 - `/design-tokens` — reviewable color, semantic, spacing, and radius tokens
+- `/verify-email#token=<opaque-token>` — explicit email verification confirmation; the fragment is stripped immediately and never stored
 - `/` and unknown paths redirect to `/foundation`
 
 ## Design system structure
@@ -40,6 +41,8 @@ Available foundation routes:
 - `src/app/pages/` contains route-level foundation pages. Future business pages should be added by vertical slice rather than grouped into a speculative global component catalog.
 
 Application components must consume semantic variables such as `--bg-surface` and `--text-primary`. Use primitive variables only when a fixed brand color is intentional. Browser configuration is public and must not contain secrets.
+
+The verification page requests a session-bound CSRF token before either POST. It shows generic resend results and accessible status/errors. The backend endpoints are local/test-only and require an encrypted outbox key. No SMTP sender exists yet, so a resend queues a job but does not deliver an email. See the [Stage 1B-C note](../docs/implementation/milestone-1b-c-registration-verification.md).
 
 ## Checks
 

@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Make My Marriage API
-  version: 1.0.0-1a
-  description: Milestone 1A local/test registration contract. Other account endpoints are not implemented.
+  version: 1.0.0-1b-d
+  description: Stage 1B-D local/test registration and email verification contract with opt-in Mailpit delivery and rate limits.
 servers:
   - url: /api/v1
 paths:
@@ -12,7 +12,7 @@ paths:
       operationId: getRegistrationCsrf
       summary: Create an anonymous session and obtain its CSRF token
       description: >-
-        Available only when app.registration.enabled is true. The browser must retain the
+        Available only in local/test when app.registration.enabled and app.email-outbox.enabled are true. The browser must retain the
         HttpOnly SESSION cookie and send the returned token in the named header on registration.
         The response must not be cached. This session does not authenticate the user.
       security: []
@@ -45,9 +45,11 @@ paths:
       operationId: registerUser
       summary: Create an unverified account
       description: >-
-        Available only when app.registration.enabled is true. Requires an anonymous SESSION
-        cookie and its CSRF token. Creates only the user record; no email, login session,
-        wedding, or ownership is created in Milestone 1A.
+        Available only in local/test when app.registration.enabled and app.email-outbox.enabled are true.
+        Requires an anonymous SESSION cookie and its CSRF token. Atomically creates an
+        unverified user, hash-only verification token, and encrypted email-outbox job.
+        No authenticated session, wedding, or ownership is created. Delivery is deferred
+        to the separately enabled outbox worker; it never occurs in this HTTP transaction.
       security:
         - anonymousSession: []
           csrfHeader: []
@@ -86,6 +88,88 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '404':
           description: Registration gate is disabled, so the endpoint is absent.
+  /auth/email/verify:
+    post:
+      tags: [Email verification]
+      operationId: verifyEmail
+      summary: Consume an email verification token
+      description: >-
+        Local/test only with registration and outbox gates enabled. Requires the anonymous
+        SESSION cookie and matching CSRF header. Valid, unused tokens set email_verified_at
+        and are consumed atomically; account status remains ACTIVE. No login is created.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmailVerifyRequest'
+      responses:
+        '204':
+          description: Email verified; no response body or authenticated session.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+        '400':
+          $ref: '#/components/responses/InvalidVerificationToken'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '404':
+          description: Feature gate disabled; endpoint absent.
+        '429':
+          $ref: '#/components/responses/VerificationRateLimited'
+        '503':
+          $ref: '#/components/responses/VerificationUnavailable'
+  /auth/email/verification-requests:
+    post:
+      tags: [Email verification]
+      operationId: requestEmailVerification
+      summary: Request a new verification link
+      description: >-
+        Local/test only with registration and outbox gates enabled. Always returns 202 for
+        syntactically valid email, whether the account exists or is eligible. An eligible
+        unverified ACTIVE account receives a replacement token and encrypted outbox job
+        atomically. Earlier tokens are revoked and pending jobs purged when safe; an email
+        already in flight can still arrive with an unusable link. Email-specific cooldown
+        and daily limits keep the same 202 response; IP-wide excess returns 429. Redis
+        outages fail closed with 503.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerificationEmailRequest'
+      responses:
+        '202':
+          description: Request accepted without account disclosure; no response body.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+        '400':
+          $ref: '#/components/responses/MalformedJson'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '404':
+          description: Feature gate disabled; endpoint absent.
+        '422':
+          $ref: '#/components/responses/VerificationEmailValidationError'
+        '429':
+          $ref: '#/components/responses/VerificationRateLimited'
+        '503':
+          $ref: '#/components/responses/VerificationUnavailable'
 components:
   securitySchemes:
     anonymousSession:
@@ -156,6 +240,24 @@ components:
         emailVerified:
           type: boolean
           enum: [false]
+    EmailVerifyRequest:
+      type: object
+      additionalProperties: true
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: Opaque 32-byte base64url token from the URL fragment; never log it.
+    VerificationEmailRequest:
+      type: object
+      additionalProperties: true
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Trimmed and lowercased before account lookup.
     FieldError:
       type: object
       required: [field, code, message]
@@ -192,6 +294,62 @@ components:
           items:
             $ref: '#/components/schemas/FieldError'
   responses:
+    VerificationRateLimited:
+      description: Too many requests from the direct remote IP (VERIFICATION_RATE_LIMITED).
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    VerificationUnavailable:
+      description: Redis rate limiting is unavailable; no token is issued or consumed (VERIFICATION_TEMPORARILY_UNAVAILABLE).
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    VerificationEmailValidationError:
+      description: Valid JSON with an invalid email address.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/validation-error
+            title: Unprocessable Content
+            code: VALIDATION_ERROR
+            status: 422
+            detail: Invalid request fields.
+            instance: /api/v1/auth/email/verification-requests
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+            errors:
+              - field: email
+                code: INVALID_FIELD
+                message: must be a well-formed email address
+    InvalidVerificationToken:
+      description: Invalid, expired, revoked, reused, or ineligible token (VERIFICATION_TOKEN_INVALID); malformed JSON uses MALFORMED_JSON.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/verification-token-invalid
+            title: Bad Request
+            code: VERIFICATION_TOKEN_INVALID
+            status: 400
+            detail: This verification link is invalid or expired.
+            instance: /api/v1/auth/email/verify
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
     MalformedJson:
       description: Invalid JSON request body.
       headers:

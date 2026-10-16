@@ -1,6 +1,6 @@
 # Make My Marriage — Development Plan
 
-**Status:** Milestone 0 complete (Stages 0A–0D); Milestone 1A registration complete, pending review
+**Status:** Milestone 0 and 1A complete; Stages 1B-A/B/C implemented locally, uncommitted and pending review
 
 **Last updated:** 2026-10-13
 
@@ -203,3 +203,29 @@ Completed locally on 2026-10-13. The first `users` Flyway migration and `identit
 The accepted outbox decision is unchanged for production registration beginning in 1B. This explicitly temporary 1A flow stores only the unverified user in a PostgreSQL transaction. 1B must create token/outbox records atomically for future registrations and handle any retained 1A users without deleting them. Stages 1B–1D still require separate approval. No Angular account UI, login, verification email, outbox, or wedding behavior was added.
 
 Verification: the locked Gradle build and Spotless check passed; all 18 JUnit tests passed, including fresh PostgreSQL/Redis Testcontainers registration and foundation checks, concurrent email uniqueness, CSRF/session pairing, the production-profile gate, and Spring Modulith verification. OpenAPI YAML parsed, all 18 local `$ref` targets resolved, changed Markdown links resolved, and `git diff --check` passed. These checks used isolated test databases and did not reset the developer's Compose database. No commit or push was made during 1A.
+
+## 12. Milestone 1B-A implementation record
+
+The separately authorized first stage of email verification adds `V2__create_email_verification_tokens.sql` and an internal identity token lifecycle. It leaves the 1A registration API, local/test gate, OpenAPI contract, and existing accounts unchanged. Tokens use 32 random bytes, SHA-256 hash-only persistence, 24-hour expiry, row-lock ordering, revocation on replacement, and single-use consumption. Successful internal consumption sets `users.email_verified_at` without changing `users.status`; only `ACTIVE` accounts may verify. The [stage note](implementation/milestone-1b-a-verification-tokens.md) records the implementation and remaining steps.
+
+The local 1A checkpoint is commit `89c6f20`, created only after explicit authorization. Stage 1B-A changes remain uncommitted and unpushed. The outbox, worker, Mailpit adapter, verification/resend APIs, Angular page, and atomic registration integration require their later stage approvals. Duplicate-registration responses need an account-enumeration review before public signup.
+
+Verification on 2026-10-13: the locked backend build and Spotless check passed with 30 JUnit tests and zero failures. PostgreSQL/Redis Testcontainers covered the new lifecycle; a separate PostgreSQL test migrated an existing V1 account to V2 without deleting it. Flyway validated both migrations, Hibernate validated the resulting schema, and the existing registration and Modulith tests still passed. No developer database was reset or modified by these checks.
+
+## 13. Milestone 1B-B implementation record
+
+The separately authorized Stage 1B-B adds [`V3__create_email_outbox.sql`](../backend/src/main/resources/db/migration/V3__create_email_outbox.sql) and an independent `notification` Modulith module. Its root contract requires an existing transaction to enqueue encrypted email work. AES-GCM protects a validated JSON object payload with keys outside Git and PostgreSQL. The worker claims with PostgreSQL `FOR UPDATE SKIP LOCKED`, sends after the claim transaction commits, retries temporary failures at 1/2/4/8 minutes, and stops after five attempts. Two-minute leases, claim ownership checks, expiry handling, and terminal ciphertext purge support crash recovery. The [stage note](implementation/milestone-1b-b-email-outbox.md) records the exact schema, configuration, tests, and limitations.
+
+The worker is off by default and no real `EmailSender` is configured in this stage. The current 1A registration API still writes only a user, and the OpenAPI contract is unchanged. Stage 1B-A remains uncommitted; Stage 1B-B changes are also uncommitted and unpushed. A separate 1B-A checkpoint is recommended before a future 1B-B commit. Registration integration, verification/resend APIs, Angular confirmation, and Mailpit delivery require later approval.
+
+Verification on 2026-10-13: the locked backend build and Spotless check passed with 43 JUnit tests and zero failures. PostgreSQL/Redis Testcontainers verified encrypted persistence, transaction rollback, multi-worker claims, retries and crash recovery; a separate PostgreSQL migration test preserved existing V2 user/token rows when applying V3. Flyway and Hibernate validated the schema, and the existing registration, security, and Modulith checks passed. No developer database was reset or modified by these checks.
+
+## 14. Milestone 1B-C implementation record
+
+Stage 1B-C connects registration to token issuance and the encrypted transactional outbox. The gated verification and resend APIs use the existing anonymous Redis session and CSRF protection. Resend supports retained 1A users without a database reset, revokes previous tokens, and purges pending jobs by the optional V4 outbox purpose ID. The Angular `/verify-email` route consumes a token from the URL fragment only after an explicit user action. See the [stage note](implementation/milestone-1b-c-registration-verification.md).
+
+The outbox worker remains disabled and no SMTP or Mailpit sender is installed. Registration and verification remain local/test-only; the default application profile exposes none of these endpoints. Full signup abuse prevention, cooldowns, and account-enumeration review remain before public launch. Stage 1B-A/B/C changes remain uncommitted and unpushed pending separate approval. Verification results are recorded in the stage note after checks.
+
+## 15. Milestone 1B-D implementation record
+
+Stage 1B-D adds the Boot-managed SMTP adapter, branded multipart verification email, opt-in local/test worker, best-effort token eligibility checks before send, and Redis HMAC-keyed resend/verification limits. Mailpit receives mail only when the worker is enabled with complete SMTP, encryption, and rate-limit configuration. Host-run Java uses `127.0.0.1:1025`; an optional application container uses the `mailpit:1025` Compose service address. The default and production profiles do not expose registration or enable delivery. No new SQL migration is needed. See the [stage note](implementation/milestone-1b-d-mailpit-integration.md) for results and remaining limitations. Stage 1B-A/B/C/D changes remain uncommitted and unpushed.

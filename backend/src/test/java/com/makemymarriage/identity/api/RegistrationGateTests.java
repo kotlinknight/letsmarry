@@ -15,7 +15,27 @@ class RegistrationGateTests {
       context
           .getEnvironment()
           .getPropertySources()
-          .addFirst(new MapPropertySource("test", Map.of("app.registration.enabled", "true")));
+          .addFirst(
+              new MapPropertySource(
+                  "test",
+                  Map.of("app.registration.enabled", "true", "app.email-outbox.enabled", "true")));
+      context.register(RegistrationController.class);
+      context.refresh();
+      assertThat(context.getBeansOfType(RegistrationController.class)).isEmpty();
+    }
+  }
+
+  @Test
+  void productionProfileOverridesAccidentalLocalProfile() {
+    try (var context = new AnnotationConfigApplicationContext()) {
+      context.getEnvironment().setActiveProfiles("local", "production");
+      context
+          .getEnvironment()
+          .getPropertySources()
+          .addFirst(
+              new MapPropertySource(
+                  "test",
+                  Map.of("app.registration.enabled", "true", "app.email-outbox.enabled", "true")));
       context.register(RegistrationController.class);
       context.refresh();
       assertThat(context.getBeansOfType(RegistrationController.class)).isEmpty();

@@ -125,14 +125,15 @@ class FoundationIntegrationTests {
   }
 
   @Test
-  void flywayCreatesAndValidatesTheFirstIdentityTable() {
+  void flywayCreatesAndValidatesIdentityTables() {
     assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
-    assertThat(flyway.info().all()).hasSize(1);
+    assertThat(flyway.info().all()).hasSize(4);
     assertThat(
             jdbc.queryForList(
                 "select table_name from information_schema.tables where table_schema = 'public'",
                 String.class))
-        .containsExactlyInAnyOrder("flyway_schema_history", "users");
+        .containsExactlyInAnyOrder(
+            "flyway_schema_history", "users", "email_verification_tokens", "email_outbox");
     assertThat(environment.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
     assertThat(jdbc.queryForObject("show timezone", String.class)).isEqualTo("UTC");
   }
@@ -149,6 +150,14 @@ class FoundationIntegrationTests {
                 .contentType("application/json")
                 .content("{}"))
         .andExpect(status().isNotFound());
+    for (String path :
+        new String[] {"/api/v1/auth/email/verify", "/api/v1/auth/email/verification-requests"}) {
+      MockMvcBuilders.webAppContextSetup(webApplicationContext)
+          .apply(springSecurity())
+          .build()
+          .perform(post(path).with(csrf()).contentType("application/json").content("{}"))
+          .andExpect(status().isNotFound());
+    }
   }
 
   @Test

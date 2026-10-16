@@ -9,7 +9,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -34,11 +36,14 @@ import org.testcontainers.utility.DockerImageName;
     properties = {
       "server.address=127.0.0.1",
       "server.servlet.session.cookie.secure=false",
-      "app.registration.enabled=true"
+      "app.registration.enabled=true",
+      "app.email-outbox.enabled=true"
     })
 @ActiveProfiles("test")
 @Testcontainers
 class RegistrationIntegrationTests {
+  private static final String TEST_KEYS = testKeys();
+
   @Container
   static final PostgreSQLContainer POSTGRES =
       new PostgreSQLContainer(DockerImageName.parse("postgres:17.11"));
@@ -55,6 +60,8 @@ class RegistrationIntegrationTests {
     properties.add("spring.data.redis.host", REDIS::getHost);
     properties.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
     properties.add("spring.data.redis.password", () -> "");
+    properties.add("app.email-outbox.active-key-id", () -> "v1");
+    properties.add("app.email-outbox.keys", () -> TEST_KEYS);
   }
 
   @LocalServerPort int port;
@@ -252,4 +259,10 @@ class RegistrationIntegrationTests {
   }
 
   private record Csrf(String token, String headerName) {}
+
+  private static String testKeys() {
+    byte[] key = new byte[32];
+    new SecureRandom().nextBytes(key);
+    return "v1:" + Base64.getEncoder().encodeToString(key);
+  }
 }

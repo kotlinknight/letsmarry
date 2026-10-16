@@ -13,10 +13,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class RegistrationService {
   private final UserAccountRepository users;
   private final PasswordEncoder passwordEncoder;
+  private final EmailVerificationService emailVerification;
 
-  public RegistrationService(UserAccountRepository users, PasswordEncoder passwordEncoder) {
+  public RegistrationService(
+      UserAccountRepository users,
+      PasswordEncoder passwordEncoder,
+      EmailVerificationService emailVerification) {
     this.users = users;
     this.passwordEncoder = passwordEncoder;
+    this.emailVerification = emailVerification;
   }
 
   @Transactional
@@ -33,6 +38,7 @@ public class RegistrationService {
       }
       throw exception;
     }
+    emailVerification.issueForUser(user);
     return new RegisteredUser(user.getId(), user.getDisplayName(), user.getEmail(), false);
   }
 

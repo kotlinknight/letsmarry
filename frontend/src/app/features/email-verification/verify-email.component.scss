@@ -1,0 +1,94 @@
+:host {
+  display: block;
+}
+
+.verification-page {
+  display: grid;
+  min-height: calc(100vh - 4.5rem);
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.verification-card {
+  width: min(100%, 34rem);
+  padding: clamp(var(--space-6), 5vw, var(--space-12));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.eyebrow {
+  color: var(--text-brand);
+  font-size: var(--font-small);
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+h1 {
+  margin-block: var(--space-2) var(--space-4);
+}
+
+h2 {
+  font-size: var(--font-h3);
+}
+
+p {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+form {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-10);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--border-default);
+}
+
+label {
+  font-weight: 650;
+}
+
+input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+button {
+  min-height: 2.75rem;
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-brand);
+  color: var(--text-inverse);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-brand-hover);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.field-error {
+  margin: 0;
+  color: var(--semantic-danger);
+}

@@ -47,7 +47,7 @@ Named volumes survive stops and container recreation. Changing `POSTGRES_*` valu
 
 ## Application containers and deployment boundary
 
-The optional `application` profile adds the backend and frontend images. The backend waits for PostgreSQL and Redis health; the frontend waits for backend readiness and proxies `/api` requests to it. Both application ports bind only to loopback and both images run as non-root users.
+The optional `application` profile adds the backend and frontend images. The backend waits for PostgreSQL, Redis, and Mailpit health; the frontend waits for backend readiness and proxies `/api` requests to it. Both application ports bind only to loopback and both images run as non-root users. For local verification email in containers, set `BACKEND_SPRING_PROFILES_ACTIVE=local`, both private keys, and `EMAIL_OUTBOX_WORKER_ENABLED=true` in the ignored `.env`; the backend then uses `mailpit:1025` internally and generates browser links to `http://127.0.0.1:4200/verify-email`. The default container profile does not expose registration or send mail.
 
 Build, start, and check the complete local stack from the repository root:
 

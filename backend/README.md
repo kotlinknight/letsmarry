@@ -1,24 +1,24 @@
 # Backend
 
-This is the Spring Boot modular monolith. Milestones 0B and 0D provide the foundation. Milestone 1A adds local/test-only user registration, the first `users` migration, and an OpenAPI contract. Email verification, login, and wedding features are not implemented.
+This is the Spring Boot modular monolith. Milestone 1B-D adds opt-in local Mailpit delivery and verification-request limits to the earlier registration, token, and encrypted-outbox stages. Login and wedding features are not implemented.
 
 ## Toolchain and dependencies
 
 Use Java 25 and the included Gradle 9.8.1 Wrapper. Spring Boot 4.1.1 manages Spring Security, JPA/Hibernate, Redis, Spring Session, Flyway, PostgreSQL JDBC, JUnit, and Testcontainers versions. Spring Modulith uses its 2.1.1 BOM. The wrapper verifies the official Gradle distribution checksum; `gradle.lockfile` records resolved application/test dependencies.
 
-The build uses Boot 4's focused Web MVC, Redis Session, Flyway, and Validation starters. No separate dependency-management plugin is needed: Gradle imports the BOMs directly. Mail/provider SDKs, client generation, and persistent event publication remain deferred. Spotless 8.10.4 with Google Java Format 1.36.1 enforces the Java source format.
+The build uses Boot 4's focused Web MVC, Redis Session, Flyway, Validation, and Mail starters. No separate dependency-management plugin is needed: Gradle imports the BOMs directly. Production provider SDKs, client generation, and persistent event publication remain deferred. Spotless 8.10.4 with Google Java Format 1.36.1 enforces the Java source format.
 
-There is one Gradle project with base package `com.makemymarriage`. `identity` is the first business module; `platform` holds shared security and correlation-ID support. Add other modules with their first features.
+There is one Gradle project with base package `com.makemymarriage`. `identity` owns accounts and verification tokens; `notification` owns the encrypted outbox and delivery worker; `platform` holds shared security and correlation-ID support. Add other modules with their first features.
 
 Future module rules:
 
 - `identity` owns accounts and authentication without wedding-role knowledge.
 - `wedding` owns creation, couple profiles, membership, and permissions in separated internal packages.
-- `notification` owns the single transactional email outbox and delivery adapter.
+- `notification` exposes `EmailOutbox`, `EmailSender`, and delivery-eligibility contracts; the local adapter uses SMTP through Mailpit.
 - `audit` owns sensitive action history.
 - Modules expose small public contracts and keep repositories internal.
 
-Flyway applies the [first migration](src/main/resources/db/migration/V1__create_users.sql) and validates its history. Hibernate uses `ddl-auto=validate`, with Open Session in View disabled. Never edit a shared migration or use Hibernate schema generation.
+Flyway applies the [users migration](src/main/resources/db/migration/V1__create_users.sql), [verification-token migration](src/main/resources/db/migration/V2__create_email_verification_tokens.sql), and [outbox migration](src/main/resources/db/migration/V3__create_email_outbox.sql), then validates its history. Hibernate uses `ddl-auto=validate`, with Open Session in View disabled. Never edit a shared migration or use Hibernate schema generation.
 
 The entry point sets the backend JVM's default timezone to UTC before Spring starts. This makes JDBC startup and server timestamps independent of the host timezone, including the Windows `Asia/Calcutta` alias that the selected PostgreSQL image rejects. It does not change the host timezone or future wedding-specific IANA timezone fields. Integration tests launch through this same entry point and verify the database connection timezone.
 
@@ -33,6 +33,13 @@ $env:DATABASE_USERNAME = 'makemymarriage'
 $env:DATABASE_PASSWORD = 'local-development-only'
 $env:REDIS_HOST = '127.0.0.1'
 $env:REDIS_PORT = '6379'
+$env:EMAIL_OUTBOX_ACTIVE_KEY_ID = 'v1'
+$env:EMAIL_OUTBOX_KEYS = 'v1:<base64-of-a-private-random-32-byte-key>'
+$env:VERIFICATION_RATE_LIMIT_KEY = '<base64-of-a-different-private-random-32-byte-key>'
+$env:SPRING_MAIL_HOST = '127.0.0.1'
+$env:SPRING_MAIL_PORT = '1025'
+$env:MAIL_FROM = 'hello@makemymarriage.local'
+$env:EMAIL_OUTBOX_WORKER_ENABLED = 'true'
 Set-Location backend
 .\gradlew.bat bootRun
 ```
@@ -43,7 +50,7 @@ These are development examples. Match the database name, username, password, and
 
 ## Registration behavior
 
-`app.registration.enabled` is false by default, and the controller also requires the `local` or `test` profile. The `local` profile enables `GET /api/v1/auth/csrf` and `POST /api/v1/auth/register` only for local development; integration tests opt in explicitly. These endpoints return `404` when the gate is off. This is not a production-ready public signup: verification email, outbox, rate limiting, and login arrive in later account stages.
+`app.registration.enabled` and `app.email-outbox.enabled` are false in the base profile. The controller requires both flags and a `local` or `test` profile; `production` blocks it even if also activated. The `local` profile enables the flags and Redis rate limiting, so private outbox and rate-limit keys are required at startup. CSRF, registration, verification, and resend return `404` when gated off. The scheduled worker additionally requires explicit `EMAIL_OUTBOX_WORKER_ENABLED=true`; login arrives later.
 
 With the local backend running, use the same web session for CSRF bootstrap and registration:
 
@@ -60,15 +67,21 @@ $body = @{
 Invoke-RestMethod http://127.0.0.1:8080/api/v1/auth/register -Method Post -WebSession $registrationSession -Headers $headers -ContentType 'application/json' -Body $body
 ```
 
-Registration returns `201` with a UUIDv7 ID and `emailVerified: false`. The anonymous Redis session is only for CSRF; registration does not log the user in. Repeating the example email returns `409`. The password is never returned. See the [OpenAPI contract](../docs/api/openapi.yaml) and [implementation note](../docs/implementation/milestone-1a-user-registration.md).
+Registration returns `201` with a UUIDv7 ID and `emailVerified: false`. The anonymous Redis session is only for CSRF; registration does not log the user in. Repeating the example email returns `409`. The password and raw token are never returned. With the worker enabled, wait a few seconds and open [Mailpit](http://127.0.0.1:8025); open the verification link, click **Confirm email address** on the Angular page, and observe a verified result. A used link fails on retry. You can request a fresh email with the same session and CSRF header:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/api/v1/auth/email/verification-requests -Method Post -WebSession $registrationSession -Headers $headers -ContentType 'application/json' -Body '{"email":"anjali@example.com"}'
+```
+
+The resend response is always empty `202` for a valid address under email-specific limits. Only one resend per email every five minutes and three per rolling day are allowed; the IP-wide default is 30/hour. Verification attempts default to 20/hour per direct remote IP. IP-wide overuse returns `429`; Redis failure returns `503` and does not issue or consume a token. Do not use forwarded IP headers without configuring a trusted proxy. See the [OpenAPI contract](../docs/api/openapi.yaml) and [Stage 1B-D note](../docs/implementation/milestone-1b-d-mailpit-integration.md).
 
 ## Foundation behavior
 
 - `GET /actuator/health`, `/actuator/health/liveness`, and `/actuator/health/readiness` are public. Responses hide dependency details; readiness includes PostgreSQL and Redis, while liveness checks application state.
 - Other requests require authentication. Anonymous reads return `401`, without redirecting to a login screen. Writes without a valid CSRF token return `403`.
-- Basic authentication, generated users, login/logout pages, and saved-request redirects are disabled. The only account endpoints are the gated registration and CSRF bootstrap endpoints.
+- Basic authentication, generated users, login/logout pages, and saved-request redirects are disabled. The account endpoints are gated CSRF bootstrap, registration, verification, and resend.
 - Spring Session persists sessions in Redis under `makemymarriage:session`. Cookies are HttpOnly and SameSite=Lax; URL-based session tracking is disabled. The configurable 30-minute timeout is a foundation default, not the final account policy.
-- Default Spring Security session-based CSRF protection remains enabled. Local/test registration uses `SESSION` and `X-CSRF-TOKEN`; Angular integration and token renewal after future login/logout are deferred.
+- Default Spring Security session-based CSRF protection remains enabled. The local/test Angular verification page uses `SESSION` and `X-CSRF-TOKEN`; token renewal after future login/logout remains deferred.
 
 Once the backend starts, open [health](http://127.0.0.1:8080/actuator/health) or run:
 
@@ -76,7 +89,21 @@ Once the backend starts, open [health](http://127.0.0.1:8080/actuator/health) or
 Invoke-RestMethod http://127.0.0.1:8080/actuator/health/readiness
 ```
 
-An `UP` readiness response verifies application connectivity to PostgreSQL and Redis. Mailpit is a separate development service; the backend does not send email yet.
+An `UP` readiness response verifies application connectivity to PostgreSQL and Redis. It does not prove SMTP delivery; confirm that separately in Mailpit.
+
+## Stage 1B-B outbox configuration
+
+The base profile disables both `app.email-outbox.enabled` and `app.email-outbox.worker.enabled`; the local profile enables only the outbox. Enabling it requires `EMAIL_OUTBOX_ACTIVE_KEY_ID` and `EMAIL_OUTBOX_KEYS` in the backend process environment. `EMAIL_OUTBOX_KEYS` is a comma-separated list such as `v1:<Base64-encoded 32-byte key>`; keep older key IDs present until their pending messages are delivered or expired. Generate a stable key outside Git, provide it through the IDE or shell on each run, and never print or commit its value. The root `.env.example` documents variable names only; Compose's `--env-file` does not export them to a host-run backend.
+
+Stage 1B-D supplies a Spring Boot managed SMTP sender. The scheduled worker remains disabled by default, is local/test-only, and fails startup if its sender or required SMTP settings are absent. `SPRING_MAIL_HOST=127.0.0.1` and `SPRING_MAIL_PORT=1025` work for a host-run backend; an application container uses `mailpit:1025`. Do not set `SPRING_MAIL_HOST` when no SMTP service is configured, because Boot's mail health check would then affect readiness. The configured SMTP connection/read/write timeouts are 5/10/10 seconds, below the two-minute worker lease. Keep both private keys stable across restarts while pending jobs exist. See the [Stage 1B-D note](../docs/implementation/milestone-1b-d-mailpit-integration.md).
+
+## Stage 1B-C behavior
+
+Registration atomically writes the unverified user, a hash-only 24-hour verification token, and an encrypted `VERIFY_EMAIL` outbox job. `V4__link_outbox_purpose.sql` adds a nullable purpose ID to identify a job for cancellation. The worker can now deliver that job to Mailpit when explicitly enabled.
+
+The controller requires both `app.registration.enabled=true` and `app.email-outbox.enabled=true`, plus a `local` or `test` profile. Base defaults are false; `local` enables both. Set a private 32-byte AES-GCM key using `EMAIL_OUTBOX_ACTIVE_KEY_ID` and `EMAIL_OUTBOX_KEYS` in the backend process environment before starting. Missing key configuration fails startup safely. Keep the key outside Git and PostgreSQL. The frontend link base defaults to `http://127.0.0.1:4200/verify-email`; override it with `VERIFICATION_FRONTEND_URL` for another local origin. HTTPS is required outside loopback.
+
+With the anonymous `SESSION` cookie and `X-CSRF-TOKEN` from `GET /api/v1/auth/csrf`, `POST /api/v1/auth/email/verify` accepts `{ "token": "<opaque-token>" }` and returns `204` on success. `POST /api/v1/auth/email/verification-requests` accepts `{ "email": "anjali@example.com" }` and returns an empty `202` for any valid email, whether eligible or not. It supports older 1A accounts and revokes previous links. The raw token is never returned by an API; tests inspect the isolated encrypted outbox. The duplicate registration `409` remains a known account-enumeration issue before public signup. See the [stage note](../docs/implementation/milestone-1b-c-registration-verification.md) and [OpenAPI contract](../docs/api/openapi.yaml).
 
 ## Verification
 
@@ -86,7 +113,7 @@ With Java 25 and Docker's Linux engine running, from `backend/`:
 .\gradlew.bat build
 ```
 
-The JUnit suite includes isolated Testcontainers PostgreSQL/Redis integration tests for the foundation and registration, password-policy/service unit tests, and Spring Modulith verification. It checks Flyway validation, user persistence, case-insensitive uniqueness, CSRF/session behavior, response safety, and the default-off gate. The tests do not use or erase the Compose database. Docker is required; an unavailable engine is a failed prerequisite, not a skipped success.
+The JUnit suite includes isolated Testcontainers PostgreSQL/Redis integration tests for the foundation, registration, token lifecycle, and encrypted outbox, plus Spring Modulith verification. It checks Flyway/Hibernate validation, existing-data migration upgrades, CSRF/session behavior, safe responses, encrypted persistence, worker claims, retries, and default-off delivery. The tests do not use or erase the Compose database. Docker is required; an unavailable engine is a failed prerequisite, not a skipped success.
 
 The executable JAR is `build/libs/make-my-marriage-0.0.1-SNAPSHOT.jar`. It accepts the same environment as `bootRun`. Test reports are in `build/reports/tests/test/index.html`.
 
@@ -96,6 +123,6 @@ Stop a running packaged application before rebuilding its JAR; replacing a JAR u
 
 For deliberate dependency updates, review compatibility first, regenerate locks with `./gradlew.bat build --write-locks`, review the lockfile diff, then run the normal locked build. Do not update versions just to bypass a failing test.
 
-Login, email delivery workflows, and wedding creation are outside Milestone 1A.
+Login and wedding creation remain outside Stage 1B-D. Duplicate-registration `409` responses need an account-enumeration review before public signup.
 
 See the [development plan](../docs/05-development-plan.md) and [architecture](../docs/02-system-architecture.md).

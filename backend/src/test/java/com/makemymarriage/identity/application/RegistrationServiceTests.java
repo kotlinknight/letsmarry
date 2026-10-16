@@ -20,7 +20,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 class RegistrationServiceTests {
   private final UserAccountRepository users = mock(UserAccountRepository.class);
   private final PasswordEncoder encoder = mock(PasswordEncoder.class);
-  private final RegistrationService service = new RegistrationService(users, encoder);
+  private final EmailVerificationService emailVerification = mock(EmailVerificationService.class);
+  private final RegistrationService service =
+      new RegistrationService(users, encoder, emailVerification);
 
   @Test
   void normalizesInputAndPersistsOnlyTheEncodedPassword() {
@@ -35,6 +37,7 @@ class RegistrationServiceTests {
 
     ArgumentCaptor<UserAccount> saved = ArgumentCaptor.forClass(UserAccount.class);
     verify(users).saveAndFlush(saved.capture());
+    verify(emailVerification).issueForUser(saved.getValue());
     verify(encoder).encode(" a long café phrase ");
     assertThat(saved.getValue().getEmail()).isEqualTo("anjali@example.com");
     assertThat(ReflectionTestUtils.getField(saved.getValue(), "passwordHash"))
