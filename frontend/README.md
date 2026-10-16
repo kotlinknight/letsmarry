@@ -1,6 +1,6 @@
 # Make My Marriage frontend
 
-This directory contains the Angular foundation from Milestones 0C and 0D and the minimal Stage 1B-C email-verification confirmation page. It provides a strict standalone application, lazy routing, a responsive application shell, reviewed Figma design tokens, persistent Light/Dark themes, automated lint and browser checks, and a production-style container image. It does not contain registration, login, wedding creation, or dashboard data.
+This directory contains the Angular foundation from Milestones 0C and 0D, the Stage 1B-C email-verification confirmation page, and the Stage 1C-C authentication UI. It provides a strict standalone application, lazy routing, a responsive application shell, reviewed Figma design tokens, persistent Light/Dark themes, automated lint and browser checks, and a production-style container image. Wedding creation and dashboard business data are not implemented.
 
 ## Requirements
 
@@ -23,13 +23,15 @@ On macOS or Linux, omit the `.cmd` suffix.
 npm.cmd start
 ```
 
-Open [http://127.0.0.1:4200](http://127.0.0.1:4200). The development server uses `proxy.conf.json` to forward relative `/api` requests to `http://127.0.0.1:8080`. Start the backend separately when an API is required; the foundation pages themselves do not call it.
+Open [http://127.0.0.1:4200](http://127.0.0.1:4200). The development server uses `proxy.conf.json` to forward relative `/api` requests to `http://127.0.0.1:8080`. Start the backend, PostgreSQL, and Redis separately for authentication; `app.authentication.enabled` is false by default and must be enabled in the local backend configuration. Only verified, ACTIVE users can sign in. The foundation pages themselves do not call the API.
 
 Available foundation routes:
 
 - `/foundation` — visual foundation, scope boundary, and scaffold status
 - `/design-tokens` — reviewable color, semantic, spacing, and radius tokens
 - `/verify-email#token=<opaque-token>` — explicit email verification confirmation; the fragment is stripped immediately and never stored
+- `/login` — responsive email/password sign-in with CSRF bootstrap and generic errors
+- `/account` — guarded temporary account page with current-user details and logout
 - `/` and unknown paths redirect to `/foundation`
 
 ## Design system structure
@@ -42,7 +44,11 @@ Available foundation routes:
 
 Application components must consume semantic variables such as `--bg-surface` and `--text-primary`. Use primitive variables only when a fixed brand color is intentional. Browser configuration is public and must not contain secrets.
 
-The verification page requests a session-bound CSRF token before either POST. It shows generic resend results and accessible status/errors. The backend endpoints are local/test-only and require an encrypted outbox key. No SMTP sender exists yet, so a resend queues a job but does not deliver an email. See the [Stage 1B-C note](../docs/implementation/milestone-1b-c-registration-verification.md).
+The verification page requests a session-bound CSRF token before either POST. It shows generic resend results and accessible status/errors. The backend registration/verification endpoints are local/test-only and require an encrypted outbox key. The opt-in local worker can deliver queued mail to Mailpit; without it, jobs remain pending. See the [Stage 1B-D note](../docs/implementation/milestone-1b-d-mailpit-integration.md).
+
+Stage 1C-C uses same-origin HttpClient calls with browser cookies. Every unsafe authentication request fetches a fresh JSON CSRF token first; a rejected request is shown to the user and is never automatically replayed. Session state lives in an Angular service, not browser storage. Application startup and protected navigation call `/api/v1/users/me`; a `401` redirects protected navigation to sign-in and a service failure hides stale account details. A failed logout is checked with `/users/me` before the UI reports the session ended. See the [Stage 1C-C note](../docs/implementation/milestone-1c-c-angular-authentication.md).
+
+The DTOs in `src/app/core/api/auth-api.service.ts` are manually mirrored from `docs/api/openapi.yaml`. The locked toolchain has no OpenAPI generator yet; when one is adopted, generated types must be kept separate from handwritten services. Password recovery and registration UI are deferred. The verification link remains usable only where the gated backend endpoint is enabled.
 
 ## Checks
 
@@ -54,6 +60,6 @@ npm.cmd run format:check
 npm.cmd run test:e2e
 ```
 
-The Angular unit-test builder runs Vitest in jsdom. Playwright exercises desktop navigation/theme persistence, mobile keyboard/drawer behavior, and unknown-route recovery in Chromium. Its local web-server setting reuses a healthy application already listening on port 4200, so the same journeys can validate the container profile.
+The Angular unit-test builder runs Vitest in jsdom. The normal Playwright suite exercises foundation navigation and authentication with controlled API fixtures, including protected-route restoration, logout, session expiry, and mobile Light/Dark behavior in Chromium. Stage 1C-D adds an opt-in real-service Chromium journey through registration, Mailpit verification, login, Redis session restoration, and logout. It runs only with `MMM_REAL_SERVICES=1` and isolated service-container environment variables; see the [1C-D integration note](../docs/implementation/milestone-1c-d-authentication-integration.md). The local web-server setting reuses a healthy application already listening on port 4200, so the same journeys can validate the container profile.
 
 The [Dockerfile](Dockerfile) builds the locked production bundle and serves it from NGINX as the unprivileged `nginx` user. NGINX provides SPA fallback routing, security headers, correct static-asset types, and an `/api` reverse proxy to the backend container. Angular critical-style inlining is disabled for production so the strict Content Security Policy can reject inline scripts and styles.

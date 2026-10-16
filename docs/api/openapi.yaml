@@ -1,20 +1,20 @@
 openapi: 3.0.3
 info:
   title: Make My Marriage API
-  version: 1.0.0-1b-d
-  description: Stage 1B-D local/test registration and email verification contract with opt-in Mailpit delivery and rate limits.
+  version: 1.0.0-1c-b
+  description: Stage 1C-B adds current-user retrieval, server-side logout, and session revalidation.
 servers:
   - url: /api/v1
 paths:
   /auth/csrf:
     get:
-      tags: [Registration]
-      operationId: getRegistrationCsrf
+      tags: [Authentication]
+      operationId: getCsrf
       summary: Create an anonymous session and obtain its CSRF token
       description: >-
-        Available only in local/test when app.registration.enabled and app.email-outbox.enabled are true. The browser must retain the
-        HttpOnly SESSION cookie and send the returned token in the named header on registration.
-        The response must not be cached. This session does not authenticate the user.
+        Available independently of registration and outbox gates. The browser must retain the
+        HttpOnly SESSION cookie and send the returned token in the named header on unsafe account requests.
+        The response must not be cached. An anonymous CSRF session does not authenticate the user.
       security: []
       responses:
         '200':
@@ -37,8 +37,121 @@ paths:
               example:
                 token: opaque-csrf-token
                 headerName: X-CSRF-TOKEN
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: loginUser
+      summary: Authenticate a verified active account
+      description: >-
+        Requires the anonymous SESSION cookie and CSRF header from GET /auth/csrf. The
+        authentication feature gate is disabled by default and independent of public
+        registration. On success Spring Security rotates the session ID, stores the
+        authenticated session in Redis, and clears the pre-login CSRF token. Fetch
+        GET /auth/csrf again before another unsafe request. Unknown email, incorrect
+        password, unverified email, suspended and deactivated accounts share one
+        generic 401 response. No password hash or session credential is returned in JSON.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authenticated Redis-backed session established.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            Set-Cookie:
+              description: Rotated HttpOnly SESSION cookie; Secure over HTTPS.
+              schema:
+                type: string
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/MalformedJson'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
         '404':
-          description: Registration gate is disabled, so the endpoint is absent.
+          description: Authentication feature gate is disabled; endpoint absent.
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/AuthenticationRateLimited'
+        '503':
+          $ref: '#/components/responses/AuthenticationUnavailable'
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logoutUser
+      summary: Invalidate the current browser session
+      description: >-
+        Requires a valid CSRF token. Invalidates only the current Redis session, clears
+        Spring Security authentication and the old CSRF state, and expires the SESSION
+        cookie. A repeated request with a newly bootstrapped anonymous session and valid
+        CSRF token also returns 204. The old CSRF token cannot be reused after logout.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      responses:
+        '204':
+          description: Current session invalidated, or no authenticated session remained.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            Set-Cookie:
+              description: Expired SESSION cookie.
+              schema:
+                type: string
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '503':
+          $ref: '#/components/responses/AuthenticationUnavailable'
+  /users/me:
+    get:
+      tags: [Users]
+      operationId: getCurrentUser
+      summary: Read the current eligible account from PostgreSQL
+      description: >-
+        Requires an authenticated Redis session. Account standing and email verification
+        are revalidated against PostgreSQL before the response. Expired, invalidated,
+        ineligible, or missing accounts receive 401; an ineligible session is invalidated.
+        The response uses fresh account data and must not be cached.
+      security:
+        - authenticatedSession: []
+      responses:
+        '200':
+          description: Current account details.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '503':
+          $ref: '#/components/responses/AuthenticationUnavailable'
   /auth/register:
     post:
       tags: [Registration]
@@ -177,6 +290,11 @@ components:
       in: cookie
       name: SESSION
       description: Anonymous Spring Session cookie returned by GET /auth/csrf.
+    authenticatedSession:
+      type: apiKey
+      in: cookie
+      name: SESSION
+      description: HttpOnly, Redis-backed authenticated planner session.
     csrfHeader:
       type: apiKey
       in: header
@@ -189,6 +307,65 @@ components:
         type: string
         format: uuid
   schemas:
+    LoginRequest:
+      type: object
+      additionalProperties: true
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Trimmed and lowercased before validation and lookup.
+        password:
+          type: string
+          format: password
+          description: Required and NFC-normalized without trimming before hash comparison.
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/LoginUser'
+    LoginUser:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, email, emailVerified, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        email:
+          type: string
+          format: email
+        emailVerified:
+          type: boolean
+          enum: [true]
+        status:
+          type: string
+          enum: [ACTIVE]
+    CurrentUserResponse:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, email, emailVerified, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        email:
+          type: string
+          format: email
+        emailVerified:
+          type: boolean
+          enum: [true]
+        status:
+          type: string
+          enum: [ACTIVE]
     CsrfResponse:
       type: object
       additionalProperties: false
@@ -294,6 +471,62 @@ components:
           items:
             $ref: '#/components/schemas/FieldError'
   responses:
+    AuthenticationRequired:
+      description: Session is absent, expired, invalidated, or no longer eligible.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/authentication-required
+            title: Unauthorized
+            status: 401
+            detail: Authentication is required.
+            instance: /api/v1/users/me
+            code: AUTHENTICATION_REQUIRED
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+    InvalidCredentials:
+      description: Generic response for unknown, incorrect, unverified, suspended, or deactivated accounts.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.makemymarriage.com/problems/invalid-credentials
+            title: Unauthorized
+            status: 401
+            detail: Invalid credentials.
+            instance: /api/v1/auth/login
+            code: INVALID_CREDENTIALS
+            correlationId: c5edb916-641e-4aaa-a7bd-73005ee10bca
+    AuthenticationRateLimited:
+      description: Configured email or direct-IP attempt limit exceeded.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AuthenticationUnavailable:
+      description: Authentication is unavailable because required storage or limiting cannot be used.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     VerificationRateLimited:
       description: Too many requests from the direct remote IP (VERIFICATION_RATE_LIMITED).
       headers:

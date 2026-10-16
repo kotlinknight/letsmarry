@@ -59,8 +59,8 @@ Cookie: SESSION=<opaque-session-id>
 
 - Spring Session stores planner sessions in Redis. The browser sends an opaque HttpOnly session cookie; Angular cannot read the session credential.
 - Use `Secure` cookies under deployed HTTPS, deliberate `SameSite` settings, trusted-origin checks, and CSRF protection for cookie-authenticated writes. Local HTTP exceptions are local-only.
-- Milestone 1A implements `GET /auth/csrf`: it creates an anonymous Redis-backed `SESSION` cookie and returns `{ "token": "...", "headerName": "X-CSRF-TOKEN" }` with `Cache-Control: no-store`. Send the cookie and header together for registration. Re-bootstrap after future login/logout; those flows remain unimplemented.
-- Login establishes the session; `/users/me` restores identity after page reload. Expired/invalid sessions return `401`; Angular handles reauthentication without a JWT refresh/retry loop.
+- `GET /auth/csrf` creates an anonymous Redis-backed `SESSION` cookie and returns `{ "token": "...", "headerName": "X-CSRF-TOKEN" }` with `Cache-Control: no-store`. It is independent of registration/outbox gates. Send the cookie and header together for registration, verification, login, and logout. Fetch a fresh token after login or logout before another unsafe request.
+- Login establishes an authenticated session. Stage 1C-B `/users/me` restores fresh identity from PostgreSQL after a page reload; logout invalidates the current Redis session. Expired, invalidated, or ineligible sessions return `401` without a JWT refresh loop.
 - [ADR-007](adr/ADR-007-redis-sessions.md) is accepted. Planner access/refresh JWTs and `/auth/refresh` are removed from the design.
 
 ### Guest invitations
@@ -75,15 +75,15 @@ Cookie: SESSION=<opaque-session-id>
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/auth/csrf` | **Implemented 1A:** anonymous CSRF/session bootstrap |
+| GET | `/auth/csrf` | **Implemented 1A; made gate-independent in 1C-A:** anonymous CSRF/session bootstrap |
 | POST | `/auth/register` | **Updated 1B-C:** local/test-only atomic user, verification token, and encrypted outbox job |
-| POST | `/auth/login` | Login; establish Redis-backed session cookie and return user |
-| POST | `/auth/logout` | Invalidate server session and clear cookie |
+| POST | `/auth/login` | **Implemented 1C-A:** default-off gated login, Redis session rotation, safe user response |
+| POST | `/auth/logout` | **Implemented 1C-B:** CSRF-protected current-session invalidation and cookie expiry |
 | POST | `/auth/email/verify` | **Implemented 1B-C:** consume token and verify email |
 | POST | `/auth/email/verification-requests` | **Implemented 1B-C:** generic resend request |
 | POST | `/auth/password/forgot` | Request password reset; non-enumerating response |
 | POST | `/auth/password/reset` | Reset with valid token |
-| GET | `/users/me` | Current account profile |
+| GET | `/users/me` | **Implemented 1C-B:** fresh verified, ACTIVE account details |
 
 Example register:
 
@@ -108,7 +108,7 @@ Response `201 Created`:
 }
 ```
 
-Registration requires the `local` or `test` profile plus `app.registration.enabled=true` and `app.email-outbox.enabled=true`; the default flags are false. The gated endpoints are absent (`404`) when disabled. Registration trims the display name (1–150 characters) and lowercases/trims the email (valid address, at most 320 characters). The password is NFC-normalized without trimming, must contain 15–128 Unicode code points, and cannot contain control characters. No character-composition rule is imposed. The response has no `Location` header because no user-read endpoint exists yet. It atomically creates an `ACTIVE` but unverified user, a 24-hour hash-only token, and an encrypted outbox job; it does not log in, call SMTP in the request transaction, or create a wedding. The opt-in local worker delivers through Mailpit later. `400` means malformed JSON, `422` invalid fields, `409` duplicate email, and `403` missing/invalid CSRF. Errors use RFC 9457 Problem Details with a stable `code`, server-generated `correlationId`, and matching `X-Correlation-ID` header. Duplicate-email `409` still needs an account-enumeration review before public signup.
+Registration requires the `local` or `test` profile plus `app.registration.enabled=true` and `app.email-outbox.enabled=true`; the default flags are false. The gated endpoints are absent (`404`) when disabled. Registration trims the display name (1–150 characters) and lowercases/trims the email (valid address, at most 320 characters). The password is NFC-normalized without trimming, must contain 15–128 Unicode code points, and cannot contain control characters. No character-composition rule is imposed. The response has no `Location` header because there is no addressable resource for the newly registered user; `/users/me` requires login. Registration atomically creates an `ACTIVE` but unverified user, a 24-hour hash-only token, and an encrypted outbox job; it does not log in, call SMTP in the request transaction, or create a wedding. The opt-in local worker delivers through Mailpit later. `400` means malformed JSON, `422` invalid fields, `409` duplicate email, and `403` missing/invalid CSRF. Errors use RFC 9457 Problem Details with a stable `code`, server-generated `correlationId`, and matching `X-Correlation-ID` header. Duplicate-email `409` still needs an account-enumeration review before public signup.
 
 `POST /api/v1/auth/email/verify` accepts `{ "token": "<opaque-token>" }`; valid, unexpired, unrevoked, unused tokens return `204` and atomically set `users.email_verified_at` plus consumption time. Account status remains `ACTIVE`; suspended accounts cannot verify. Invalid, expired, revoked, reused, and ineligible tokens all return generic `400 VERIFICATION_TOKEN_INVALID`. `POST /api/v1/auth/email/verification-requests` accepts `{ "email": "anjali@example.com" }`, normalizes the email, and returns an empty `202` for any syntactically valid address, whether eligible or not, including an email-specific rate limit. An eligible 1A account receives its first token; a later allowed request revokes its old token, purges the old pending job where possible, and enqueues a replacement atomically. A processing email may still arrive with an invalid link. Both POSTs require the anonymous `SESSION` cookie and CSRF header from `GET /auth/csrf`; neither authenticates the requester. Stage 1B-D adds a five-minute per-email resend cooldown, three resends per rolling day, a configurable direct-IP-wide resend ceiling (30/hour default), and a verification-attempt ceiling (20/hour default). IP-wide excess returns generic `429 VERIFICATION_RATE_LIMITED`; Redis failures return `503 VERIFICATION_TEMPORARILY_UNAVAILABLE` before touching tokens. Redis keys contain keyed HMAC digests, not plaintext addresses. See the [OpenAPI contract](api/openapi.yaml) and [1B-D note](implementation/milestone-1b-d-mailpit-integration.md).
 
@@ -116,11 +116,15 @@ Example login response:
 
 ```json
 {
-  "user": { "id": "<uuid>", "displayName": "Anjali", "email": "anjali@example.com" }
+  "user": { "id": "<uuid>", "displayName": "Anjali", "email": "anjali@example.com", "emailVerified": true, "status": "ACTIVE" }
 }
 ```
 
-Login sets the HttpOnly session cookie through `Set-Cookie`; it does not return session credentials in JSON. Logout returns `204 No Content`, invalidates the server session, and clears the cookie. Both flows require the agreed CSRF handling. Authentication examples show bodies/paths rather than every cookie or CSRF header.
+Login sets the HttpOnly session cookie through `Set-Cookie`; it does not return session credentials in JSON. Logout returns `204 No Content`, invalidates only the current Redis session, and expires its cookie. Both flows require CSRF handling. A repeated logout with a newly bootstrapped anonymous session and valid CSRF also returns `204`; replaying the old token returns `403`. Authentication examples show bodies/paths rather than every cookie or CSRF header.
+
+Stage 1C-A `POST /api/v1/auth/login` accepts `{ "email": "anjali@example.com", "password": "..." }` with the existing anonymous `SESSION` cookie and `X-CSRF-TOKEN` header. The request normalizes email by trimming/lowercasing and password by NFC without trimming. An `ACTIVE` account with a verified email and matching PBKDF2 hash receives `200`, a rotated HttpOnly session cookie, `Cache-Control: no-store`, and `{ "user": { "id": "<uuid>", "displayName": "Anjali", "email": "anjali@example.com", "emailVerified": true, "status": "ACTIVE" } }`. Retrieve a new CSRF token before subsequent writes. Unknown email, wrong password, unverified email, suspended status, and deactivated status all return the same `401 INVALID_CREDENTIALS`; malformed JSON returns `400`, invalid request fields `422`, missing/invalid CSRF `403`, rate limiting `429` with `Retry-After`, and unavailable Redis rate limiting `503`. Errors use the existing Problem Details and correlation-ID conventions. The configurable initial limits are 10 attempts per normalized email and 60 per direct IP per 15 minutes. The authentication gate is off by default and independent of public registration. See [OpenAPI](api/openapi.yaml).
+
+Stage 1C-B `GET /api/v1/users/me` requires an authenticated session and returns `{ "id": "<uuid>", "displayName": "Anjali", "email": "anjali@example.com", "emailVerified": true, "status": "ACTIVE" }` from PostgreSQL with `Cache-Control: no-store`. A request with an absent, expired, invalidated, or ineligible session receives `401 AUTHENTICATION_REQUIRED` Problem Details and a correlation ID. The account is rechecked on each protected request; a suspended, deactivated, unverified, or deleted account causes the current session to be invalidated. Redis or database unavailability returns `503 AUTHENTICATION_TEMPORARILY_UNAVAILABLE` and grants no access. `POST /api/v1/auth/logout` requires CSRF, returns empty `204`, clears the security context, invalidates the current session, and expires its cookie. Other browser sessions remain valid. See [OpenAPI](api/openapi.yaml) and the [1C-B note](implementation/milestone-1c-b-session-lifecycle.md).
 
 ## 5. HTTP responses and errors
 
@@ -691,6 +695,8 @@ Feature component
 
 Planner HTTP infrastructure handles CSRF, session-expiry responses, correlation ID and Problem Details. Guest bearer attachment is restricted to the guest invitation/RSVP API. Components should not embed raw backend URLs or read session credentials; there is no planner refresh-token mechanism.
 
+Stage 1C-C consumes the four implemented authentication endpoints from Angular: `/auth/csrf`, `/auth/login`, `/users/me`, and `/auth/logout`. The frontend fetches JSON CSRF state before each unsafe authentication request and sends the named header with the same browser session. It never replays a failed POST automatically. The guard awaits `/users/me` before displaying `/account`; `401` means sign-in is required, while a network or `503` failure leaves authentication unconfirmed and hides prior account details. After a failed logout, `/users/me` distinguishes a still-live session from confirmed invalidation. The hand-maintained DTOs currently mirror this OpenAPI contract because no pinned generator is installed; see the [1C-C note](implementation/milestone-1c-c-angular-authentication.md).
+
 ## 24. Testing checklist
 
 - [ ] Register, verify, login, restore identity through `/users/me`, logout and reset password.
@@ -714,7 +720,7 @@ Planner HTTP infrastructure handles CSRF, session-expiry responses, correlation 
 
 The first business slice now has `docs/api/openapi.yaml` (OpenAPI 3.0.3) with registration and CSRF contracts. Expand it per feature. Resolve the following before the corresponding feature's code generation or implementation:
 
-- Session timeout/invalidation policy and CSRF renewal after future login/logout under accepted Redis Spring Session authentication. The 1A bootstrap endpoint and cookie/header names are now defined.
+- Deployment trusted-origin/proxy configuration for cookie-authenticated planner requests; local same-origin access and CSRF/session lifecycle are implemented through 1C-B.
 - Exact default role permission matrix.
 - Invitation expiration/response cutoff and guest access revocation behavior.
 - Payment refunds/overpayments and idempotency persistence.

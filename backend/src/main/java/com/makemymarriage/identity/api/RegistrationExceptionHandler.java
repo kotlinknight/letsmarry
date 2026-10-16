@@ -17,7 +17,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(basePackageClasses = RegistrationController.class)
+@RestControllerAdvice(assignableTypes = RegistrationController.class)
 class RegistrationExceptionHandler {
   @ExceptionHandler(VerificationRateLimitException.class)
   ResponseEntity<ProblemDetail> rateLimited(

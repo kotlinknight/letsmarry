@@ -70,6 +70,18 @@ public class UserAccount {
     return displayName;
   }
 
+  public UserStatus getStatus() {
+    return status;
+  }
+
+  public String getPasswordHash() {
+    return passwordHash;
+  }
+
+  public boolean canAuthenticate() {
+    return status == UserStatus.ACTIVE && emailVerifiedAt != null;
+  }
+
   public Instant getEmailVerifiedAt() {
     return emailVerifiedAt;
   }

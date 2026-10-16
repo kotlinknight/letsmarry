@@ -10,6 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.csrf.CsrfException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -17,7 +18,8 @@ import tools.jackson.databind.ObjectMapper;
 class SecurityConfiguration {
 
   @Bean
-  SecurityFilterChain securityFilterChain(HttpSecurity http, ObjectMapper mapper) throws Exception {
+  SecurityFilterChain securityFilterChain(
+      HttpSecurity http, ObjectMapper mapper, AccountSessionValidator validator) throws Exception {
     return http.authorizeHttpRequests(
             authorize ->
                 authorize
@@ -30,6 +32,8 @@ class SecurityConfiguration {
                         "/actuator/health/readiness")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/auth/login")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.POST,
@@ -45,7 +49,18 @@ class SecurityConfiguration {
         .requestCache(AbstractHttpConfigurer::disable)
         .httpBasic(AbstractHttpConfigurer::disable)
         .formLogin(AbstractHttpConfigurer::disable)
-        .logout(AbstractHttpConfigurer::disable)
+        .logout(
+            logout ->
+                logout
+                    .logoutUrl("/api/v1/auth/logout")
+                    .invalidateHttpSession(true)
+                    .clearAuthentication(true)
+                    .deleteCookies("SESSION")
+                    .logoutSuccessHandler(
+                        (request, response, authentication) -> {
+                          response.setStatus(HttpStatus.NO_CONTENT.value());
+                          response.setHeader("Cache-Control", "no-store");
+                        }))
         .exceptionHandling(
             exceptions ->
                 exceptions
@@ -71,6 +86,8 @@ class SecurityConfiguration {
                                 exception instanceof CsrfException
                                     ? "A valid CSRF token is required."
                                     : "Access is denied.")))
+        .addFilterAfter(
+            new AccountSessionValidationFilter(validator, mapper), AuthorizationFilter.class)
         .build();
   }
 }

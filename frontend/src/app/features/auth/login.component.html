@@ -1,0 +1,80 @@
+<section class="login-page" aria-labelledby="login-title">
+  <div class="login-card">
+    <p class="wordmark" aria-label="Make My Marriage">mmm.</p>
+    <p class="eyebrow">Your planning space</p>
+    <h1 id="login-title">Welcome back</h1>
+    <p class="intro">Sign in to continue planning your celebration.</p>
+
+    @if (arrivalMessage) {
+      <p class="notice" role="status">{{ arrivalMessage }}</p>
+    }
+    @if (message()) {
+      <p class="notice error-notice" role="alert">{{ message() }}</p>
+    }
+
+    <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+      <div class="field">
+        <label for="login-email">Email address</label>
+        <input
+          id="login-email"
+          type="email"
+          autocomplete="username"
+          formControlName="email"
+          [attr.aria-invalid]="form.controls.email.touched && form.controls.email.invalid"
+          [attr.aria-describedby]="
+            form.controls.email.touched && form.controls.email.invalid ? 'login-email-error' : null
+          "
+        />
+        @if (form.controls.email.touched && form.controls.email.invalid) {
+          <p class="field-error" id="login-email-error" role="alert">
+            Enter a valid email address.
+          </p>
+        }
+      </div>
+
+      <div class="field">
+        <label for="login-password">Password</label>
+        <div class="password-field">
+          <input
+            id="login-password"
+            [type]="passwordVisible() ? 'text' : 'password'"
+            autocomplete="current-password"
+            formControlName="password"
+            [attr.aria-invalid]="form.controls.password.touched && form.controls.password.invalid"
+            [attr.aria-describedby]="
+              form.controls.password.touched && form.controls.password.invalid
+                ? 'login-password-error'
+                : null
+            "
+          />
+          <button
+            class="password-toggle"
+            type="button"
+            [attr.aria-label]="passwordVisible() ? 'Hide password' : 'Show password'"
+            [attr.aria-pressed]="passwordVisible()"
+            (click)="togglePassword()"
+          >
+            {{ passwordVisible() ? 'Hide' : 'Show' }}
+          </button>
+        </div>
+        @if (form.controls.password.touched && form.controls.password.invalid) {
+          <p class="field-error" id="login-password-error" role="alert">Enter your password.</p>
+        }
+      </div>
+
+      <button class="submit-button" type="submit" [disabled]="submitting()">
+        {{ submitting() ? 'Signing in…' : 'Sign in' }}
+      </button>
+    </form>
+
+    <p class="verification-help">
+      Haven’t verified your email? <a routerLink="/verify-email">Request a new link</a>.
+    </p>
+  </div>
+
+  <aside class="editorial-panel" aria-label="Make My Marriage welcome">
+    <p class="editorial-mark">✦</p>
+    <h2>Weddings, but <span>make it yours.</span></h2>
+    <p>A brighter way to plan every little thing that makes your big day yours.</p>
+  </aside>
+</section>

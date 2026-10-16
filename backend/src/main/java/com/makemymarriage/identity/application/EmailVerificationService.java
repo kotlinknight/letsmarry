@@ -5,7 +5,6 @@ import com.makemymarriage.identity.infrastructure.UserAccountRepository;
 import com.makemymarriage.notification.EmailDraft;
 import com.makemymarriage.notification.EmailOutbox;
 import java.net.URI;
-import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -59,7 +58,7 @@ public class EmailVerificationService {
 
   @Transactional
   public void requestResend(String presentedEmail) {
-    String email = presentedEmail.trim().toLowerCase(Locale.ROOT);
+    String email = EmailAddressPolicy.normalize(presentedEmail);
     users.lockByEmail(email).filter(UserAccount::canVerifyEmail).ifPresent(this::issueForUser);
   }
 

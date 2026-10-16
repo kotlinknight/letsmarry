@@ -28,8 +28,9 @@ spring:
         enabled: false
   session:
     timeout: ${SESSION_TIMEOUT:30m}
-    redis:
-      namespace: makemymarriage:session
+    data:
+      redis:
+        namespace: makemymarriage:session
   mail:
     properties:
       "[mail.smtp.connectiontimeout]": 5000
@@ -63,6 +64,13 @@ management:
           include: readinessState,db,redis
 
 app:
+  authentication:
+    enabled: ${AUTHENTICATION_ENABLED:false}
+    rate-limit:
+      key: ${AUTHENTICATION_RATE_LIMIT_KEY:}
+      email-attempts: ${AUTHENTICATION_EMAIL_ATTEMPTS:10}
+      ip-attempts: ${AUTHENTICATION_IP_ATTEMPTS:60}
+      window-seconds: ${AUTHENTICATION_WINDOW_SECONDS:900}
   registration:
     enabled: false
   verification:

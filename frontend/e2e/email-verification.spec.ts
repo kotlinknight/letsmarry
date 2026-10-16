@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/users/me', (route) =>
+    route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }),
+  );
+});
+
 test('verification waits for a click and removes the token fragment', async ({ page }) => {
   let verificationRequests = 0;
   await page.route('**/api/v1/auth/csrf', (route) =>

@@ -1,6 +1,6 @@
 # Backend
 
-This is the Spring Boot modular monolith. Milestone 1B-D adds opt-in local Mailpit delivery and verification-request limits to the earlier registration, token, and encrypted-outbox stages. Login and wedding features are not implemented.
+This is the Spring Boot modular monolith. Stage 1C-B adds current-user retrieval, server-side logout, and account revalidation to the opt-in Redis-session login. Angular authentication and wedding features are not implemented yet.
 
 ## Toolchain and dependencies
 
@@ -40,6 +40,8 @@ $env:SPRING_MAIL_HOST = '127.0.0.1'
 $env:SPRING_MAIL_PORT = '1025'
 $env:MAIL_FROM = 'hello@makemymarriage.local'
 $env:EMAIL_OUTBOX_WORKER_ENABLED = 'true'
+$env:AUTHENTICATION_ENABLED = 'true'
+$env:AUTHENTICATION_RATE_LIMIT_KEY = '<base64-of-a-third-private-random-32-byte-key>'
 Set-Location backend
 .\gradlew.bat bootRun
 ```
@@ -48,9 +50,11 @@ These are development examples. Match the database name, username, password, and
 
 `local` binds the backend to `127.0.0.1:8080` and permits HTTP session cookies for development. Outside that profile, the database credentials and Redis host must be supplied, and session cookies are Secure. Override the backend port with `SERVER_PORT` if necessary. Stop the backend with Ctrl+C.
 
-## Registration behavior
+## Registration and authentication behavior
 
-`app.registration.enabled` and `app.email-outbox.enabled` are false in the base profile. The controller requires both flags and a `local` or `test` profile; `production` blocks it even if also activated. The `local` profile enables the flags and Redis rate limiting, so private outbox and rate-limit keys are required at startup. CSRF, registration, verification, and resend return `404` when gated off. The scheduled worker additionally requires explicit `EMAIL_OUTBOX_WORKER_ENABLED=true`; login arrives later.
+`app.registration.enabled` and `app.email-outbox.enabled` are false in the base profile. The registration controller requires both flags and a `local` or `test` profile; `production` blocks it even if also activated. The `local` profile enables the flags and Redis rate limiting, so private outbox and rate-limit keys are required at startup. Registration, verification, and resend return `404` when gated off; `GET /api/v1/auth/csrf` remains available independently. The scheduled worker additionally requires explicit `EMAIL_OUTBOX_WORKER_ENABLED=true`.
+
+Login requires separate `AUTHENTICATION_ENABLED=true` and a private `AUTHENTICATION_RATE_LIMIT_KEY` (Base64 of at least 32 random bytes). The flag is false by default, including local development, and has no profile restriction. A future approved production deployment may enable login while public registration remains disabled. Do not reuse the outbox encryption or verification rate-limit keys. A missing or weak authentication rate-limit key fails startup when login is enabled. The initial configurable limits are 10 attempts per normalized email and 60 per direct IP per 15 minutes.
 
 With the local backend running, use the same web session for CSRF bootstrap and registration:
 
@@ -75,13 +79,39 @@ Invoke-RestMethod http://127.0.0.1:8080/api/v1/auth/email/verification-requests 
 
 The resend response is always empty `202` for a valid address under email-specific limits. Only one resend per email every five minutes and three per rolling day are allowed; the IP-wide default is 30/hour. Verification attempts default to 20/hour per direct remote IP. IP-wide overuse returns `429`; Redis failure returns `503` and does not issue or consume a token. Do not use forwarded IP headers without configuring a trusted proxy. See the [OpenAPI contract](../docs/api/openapi.yaml) and [Stage 1B-D note](../docs/implementation/milestone-1b-d-mailpit-integration.md).
 
+After verification, obtain a fresh CSRF token with the same browser session, then log in:
+
+```powershell
+$csrfResponse = Invoke-WebRequest http://127.0.0.1:8080/api/v1/auth/csrf -WebSession $registrationSession
+$csrf = $csrfResponse.Content | ConvertFrom-Json
+$headers = @{}
+$headers[$csrf.headerName] = $csrf.token
+$loginBody = @{ email = 'anjali@example.com'; password = 'SecurePassword123!' } | ConvertTo-Json
+Invoke-RestMethod http://127.0.0.1:8080/api/v1/auth/login -Method Post -WebSession $registrationSession -Headers $headers -ContentType 'application/json' -Body $loginBody
+```
+
+Login returns `200` with a safe user object and rotates the HttpOnly `SESSION` cookie. It does not return a session credential in JSON. Unknown accounts, wrong passwords, unverified email, and suspended/deactivated accounts receive the same `401 INVALID_CREDENTIALS`. Fetch a new CSRF token after login before another write. Public registration is still disabled outside local/test. See the [1C-A note](../docs/implementation/milestone-1c-a-authentication.md).
+
+Read current account details or log out with the same browser session:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/api/v1/users/me -WebSession $registrationSession
+$csrfResponse = Invoke-WebRequest http://127.0.0.1:8080/api/v1/auth/csrf -WebSession $registrationSession
+$csrf = $csrfResponse.Content | ConvertFrom-Json
+$headers = @{}
+$headers[$csrf.headerName] = $csrf.token
+Invoke-RestMethod http://127.0.0.1:8080/api/v1/auth/logout -Method Post -WebSession $registrationSession -Headers $headers
+```
+
+`/users/me` returns the fresh verified `ACTIVE` account from PostgreSQL, without credentials or session data. Protected requests recheck account standing; suspension, deactivation, removal, or loss of email verification invalidates that browser session and returns generic `401 AUTHENTICATION_REQUIRED`. Logout returns empty `204`, expires only that browser's session cookie, and leaves other browser sessions active. Replaying the old CSRF token fails; obtain a new token from `/auth/csrf` to repeat logout or perform another write. Redis or database failure denies access with `503` Problem Details. See the [1C-B note](../docs/implementation/milestone-1c-b-session-lifecycle.md).
+
 ## Foundation behavior
 
 - `GET /actuator/health`, `/actuator/health/liveness`, and `/actuator/health/readiness` are public. Responses hide dependency details; readiness includes PostgreSQL and Redis, while liveness checks application state.
 - Other requests require authentication. Anonymous reads return `401`, without redirecting to a login screen. Writes without a valid CSRF token return `403`.
-- Basic authentication, generated users, login/logout pages, and saved-request redirects are disabled. The account endpoints are gated CSRF bootstrap, registration, verification, and resend.
+- Basic authentication, generated users, login/logout pages, and saved-request redirects are disabled. The JSON login endpoint is available only with its separate opt-in flag; `/users/me` and server-side logout are implemented.
 - Spring Session persists sessions in Redis under `makemymarriage:session`. Cookies are HttpOnly and SameSite=Lax; URL-based session tracking is disabled. The configurable 30-minute timeout is a foundation default, not the final account policy.
-- Default Spring Security session-based CSRF protection remains enabled. The local/test Angular verification page uses `SESSION` and `X-CSRF-TOKEN`; token renewal after future login/logout remains deferred.
+- Default Spring Security session-based CSRF protection remains enabled. The local/test Angular verification page uses `SESSION` and `X-CSRF-TOKEN`; login and logout clear old CSRF state, so the client must call `/auth/csrf` again before another write.
 
 Once the backend starts, open [health](http://127.0.0.1:8080/actuator/health) or run:
 
@@ -123,6 +153,6 @@ Stop a running packaged application before rebuilding its JAR; replacing a JAR u
 
 For deliberate dependency updates, review compatibility first, regenerate locks with `./gradlew.bat build --write-locks`, review the lockfile diff, then run the normal locked build. Do not update versions just to bypass a failing test.
 
-Login and wedding creation remain outside Stage 1B-D. Duplicate-registration `409` responses need an account-enumeration review before public signup.
+Angular authentication, password recovery, and wedding creation remain outside Stage 1C-B. Duplicate-registration `409` responses need an account-enumeration review before public signup.
 
 See the [development plan](../docs/05-development-plan.md) and [architecture](../docs/02-system-architecture.md).

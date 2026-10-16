@@ -120,7 +120,7 @@ This later feature will need a separate hash-only token table and its own lifecy
 
 ### Planner sessions
 
-Spring Session stores planner sessions in **Redis**, not a PostgreSQL business-data table. The browser uses an opaque HttpOnly session cookie with CSRF protection. Logout invalidates the server session; expiry and account-security invalidation rules must be specified before account implementation. There are no planner access/refresh JWTs or refresh-family tables. See [ADR-007](adr/ADR-007-redis-sessions.md).
+Spring Session stores planner sessions in **Redis**, not a PostgreSQL business-data table. The browser uses an opaque HttpOnly session cookie with CSRF protection. Planner sessions expire after 30 minutes of inactivity, rotate their ID on login, and are invalidated individually on logout. Stage 1C-B also reads the current PostgreSQL `users.status` and `email_verified_at` on each protected request; ineligible or deleted accounts lose that session. The session principal contains only the stable user ID. No new PostgreSQL table or Flyway migration was added for login or session lifecycle. There are no planner access/refresh JWTs or refresh-family tables. See [ADR-007](adr/ADR-007-redis-sessions.md).
 
 ## 5. Table catalog — Wedding and members
 

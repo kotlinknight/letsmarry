@@ -24,7 +24,7 @@
       </span>
       <span>
         <strong>Make My Marriage</strong>
-        <small>Design foundation</small>
+        <small>Wedding planning</small>
       </span>
     </a>
 
@@ -53,13 +53,25 @@
         </svg>
         Design tokens
       </a>
+      <a
+        [routerLink]="auth.isAuthenticated() ? '/account' : '/login'"
+        routerLinkActive="is-active"
+        ariaCurrentWhenActive="page"
+        (click)="closeNavigation()"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="8" r="3" />
+          <path d="M5 20c0-4 3-6 7-6s7 2 7 6" />
+        </svg>
+        {{ auth.isAuthenticated() ? 'Account' : 'Sign in' }}
+      </a>
     </nav>
 
     <div class="stage-card">
       <span class="stage-dot" aria-hidden="true"></span>
       <div>
-        <strong>Milestone 0C</strong>
-        <span>Angular foundation</span>
+        <strong>Your planning space</strong>
+        <span>Make every detail yours.</span>
       </div>
     </div>
   </aside>

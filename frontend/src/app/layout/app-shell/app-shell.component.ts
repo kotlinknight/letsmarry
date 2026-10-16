@@ -11,6 +11,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { map } from 'rxjs';
 import { ThemeService } from '../../core/theme/theme.service';
+import { AuthService } from '../../core/auth/auth.service';
 
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -23,6 +24,7 @@ export class AppShellComponent {
   private readonly breakpointObserver = inject(BreakpointObserver);
 
   readonly themeService = inject(ThemeService);
+  readonly auth = inject(AuthService);
   readonly mobileNavOpen = signal(false);
   readonly isDesktop = toSignal(
     this.breakpointObserver.observe('(min-width: 56.25rem)').pipe(map((result) => result.matches)),

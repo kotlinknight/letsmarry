@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
@@ -65,6 +66,8 @@ class FoundationIntegrationTests {
   @Autowired JdbcTemplate jdbc;
 
   @Autowired SessionRepository<? extends Session> sessions;
+
+  @Autowired StringRedisTemplate redis;
 
   @Autowired Environment environment;
   @Autowired WebApplicationContext webApplicationContext;
@@ -139,8 +142,16 @@ class FoundationIntegrationTests {
   }
 
   @Test
-  void registrationEndpointsAreAbsentWithoutTheLocalOptIn() throws Exception {
-    assertThat(get("/api/v1/auth/csrf").statusCode()).isEqualTo(404);
+  void csrfIsIndependentWhileRegistrationAndLoginStayDisabled() throws Exception {
+    var csrfResponse = get("/api/v1/auth/csrf");
+    assertThat(csrfResponse.statusCode()).isEqualTo(200);
+    assertThat(csrfResponse.body()).contains("X-CSRF-TOKEN");
+    assertThat(csrfResponse.headers().firstValue("Cache-Control").orElseThrow())
+        .contains("no-store");
+    assertThat(csrfResponse.headers().allValues("Set-Cookie"))
+        .anySatisfy(
+            cookie ->
+                assertThat(cookie).contains("SESSION=", "HttpOnly", "SameSite=Lax", "Secure"));
     MockMvcBuilders.webAppContextSetup(webApplicationContext)
         .apply(springSecurity())
         .build()
@@ -158,6 +169,12 @@ class FoundationIntegrationTests {
           .perform(post(path).with(csrf()).contentType("application/json").content("{}"))
           .andExpect(status().isNotFound());
     }
+    MockMvcBuilders.webAppContextSetup(webApplicationContext)
+        .apply(springSecurity())
+        .build()
+        .perform(
+            post("/api/v1/auth/login").with(csrf()).contentType("application/json").content("{}"))
+        .andExpect(status().isNotFound());
   }
 
   @Test
@@ -171,6 +188,8 @@ class FoundationIntegrationTests {
     session.setAttribute("foundation-check", "persisted");
     try {
       repository.save(session);
+      assertThat(redis.hasKey("makemymarriage:session:sessions:" + session.getId())).isTrue();
+      assertThat(redis.hasKey("spring:session:sessions:" + session.getId())).isFalse();
       S loaded = repository.findById(session.getId());
       assertThat(loaded).isNotNull();
       assertThat(loaded.<String>getAttribute("foundation-check")).isEqualTo("persisted");

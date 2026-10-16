@@ -1,0 +1,86 @@
+:host {
+  display: block;
+}
+
+.account-page {
+  min-height: calc(100vh - 4.5rem);
+  padding: clamp(var(--space-6), 5vw, var(--space-16));
+}
+
+.account-card {
+  width: min(100%, 42rem);
+  padding: clamp(var(--space-6), 4vw, var(--space-10));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.eyebrow {
+  color: var(--text-lilac);
+  font-size: var(--font-caption);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: var(--space-2) 0;
+  font-size: clamp(var(--font-h1), 3vw, var(--font-display));
+}
+
+.intro,
+p[role='status'] {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+dl {
+  display: grid;
+  gap: var(--space-4);
+  margin: var(--space-8) 0;
+}
+
+dl > div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-raised);
+}
+
+dt {
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 650;
+}
+
+button {
+  min-height: 2.75rem;
+  padding: var(--space-3) var(--space-5);
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-brand);
+  color: var(--text-inverse);
+  font-weight: 700;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+}
+
+.notice {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-brand-soft);
+  color: var(--text-primary);
+  line-height: 1.5;
+}

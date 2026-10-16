@@ -2,7 +2,6 @@ package com.makemymarriage.identity.application;
 
 import com.makemymarriage.identity.domain.UserAccount;
 import com.makemymarriage.identity.infrastructure.UserAccountRepository;
-import java.util.Locale;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -26,7 +25,7 @@ public class RegistrationService {
 
   @Transactional
   public RegisteredUser register(RegistrationCommand command) {
-    String email = command.email().trim().toLowerCase(Locale.ROOT);
+    String email = EmailAddressPolicy.normalize(command.email());
     String displayName = command.displayName().trim();
     String password = PasswordPolicy.normalizeAndValidate(command.password());
     UserAccount user = new UserAccount(email, passwordEncoder.encode(password), displayName);

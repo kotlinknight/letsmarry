@@ -226,12 +226,14 @@ The frontend may hide unavailable features, but every endpoint verifies authoriz
 - Spring Session stores planner sessions in Redis; the browser carries an opaque session identifier in an HttpOnly cookie.
 - Use `Secure` cookies in deployed HTTPS environments and deliberate `SameSite` settings. Any local HTTP exception is local-only.
 - Plan same-origin frontend/API access through a development proxy locally and a reverse proxy in deployment.
-- Login establishes the session and returns the user; `/users/me` restores identity after a page reload. Logout invalidates server state and expires the cookie.
+- Stage 1C-A login establishes the Redis-backed session and rotates its identifier. Stage 1C-B adds `/users/me`, current-session logout, and PostgreSQL account revalidation on protected requests.
 - Protect cookie-authenticated writes with CSRF and trusted-origin checks. Bootstrap CSRF state and obtain a fresh token after login/logout; do not globally disable CSRF for the SPA.
 - Do not issue planner access/refresh JWTs or implement `/auth/refresh`.
 - Planner sessions, guest RSVP credentials, password-reset tokens, and member invitations have separate scopes and lifetimes.
 
-**Accepted ADR:** [ADR-007](adr/ADR-007-redis-sessions.md) replaces the provisional JWT/refresh design. Exact session lifetimes and account-security invalidation rules remain to be defined before account implementation. External OIDC, social login and passwordless links are potential later options.
+**Accepted ADR:** [ADR-007](adr/ADR-007-redis-sessions.md) replaces the provisional JWT/refresh design. The initial inactivity timeout is 30 minutes, with multiple browser sessions allowed; logout invalidates only the current session, and ineligible accounts lose access on their next protected request. External OIDC, social login and passwordless links are potential later options.
+
+Stage 1C-A adds a default-off `app.authentication.enabled` gate independent of registration and outbox gates. The gate has no profile restriction, so a future approved production rollout can enable login while public registration remains disabled. The always-available `GET /auth/csrf` bootstrap is independent of those gates and grants no authenticated access. A successful login requires both `users.status=ACTIVE` and `email_verified_at IS NOT NULL`; unknown, incorrect, unverified, suspended, and deactivated attempts get the same generic response. Redis-backed rate limits count every attempt by HMAC-keyed normalized email and direct IP and fail closed. Stage 1C-B keeps only the stable account ID in the session principal. A Spring Security filter checks PostgreSQL on each protected request, stores the safe current account snapshot for that request, and invalidates an ineligible session before application code runs. See the [1C-A](implementation/milestone-1c-a-authentication.md) and [1C-B](implementation/milestone-1c-b-session-lifecycle.md) notes.
 
 ### Security rules
 
@@ -400,6 +402,8 @@ Guidelines:
 - Do not render unauthorized finance/private task content; route guards are UX only, not authorization.
 - Guest website and RSVP are mobile-first and can use a distinct more expressive public presentation while sharing the visual brand.
 - Static prototypes are **not** production interactions or API integrations.
+
+Stage 1C-C implements the first planner UI routes: `/login` and a temporary guarded `/account` page. `core/api` owns same-origin HttpClient calls to CSRF, login, `/users/me`, and logout; `core/auth` holds memory-only session state and the route guard. The guard waits for a fresh `/users/me` response before allowing `/account`. The login response supplies immediate safe user data, while `/users/me` is authoritative after reload or protected navigation. Each unsafe authentication request obtains a fresh JSON CSRF token; a `403` is displayed without replay. A failed logout is checked through `/users/me` before claiming revocation. No planner credential is stored in browser storage. The existing Light/Dark semantic tokens style both routes. See the [1C-C note](implementation/milestone-1c-c-angular-authentication.md).
 
 ## 14. Repository and development setup
 

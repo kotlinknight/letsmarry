@@ -1,4 +1,5 @@
 import { Routes } from '@angular/router';
+import { authGuard } from './core/auth/auth.guard';
 
 export const routes: Routes = [
   {
@@ -34,6 +35,19 @@ export const routes: Routes = [
           import('./features/email-verification/verify-email.component').then(
             (module) => module.VerifyEmailComponent,
           ),
+      },
+      {
+        path: 'login',
+        title: 'Sign in | Make My Marriage',
+        loadComponent: () =>
+          import('./features/auth/login.component').then((module) => module.LoginComponent),
+      },
+      {
+        path: 'account',
+        title: 'Your account | Make My Marriage',
+        canActivate: [authGuard],
+        loadComponent: () =>
+          import('./features/auth/account.component').then((module) => module.AccountComponent),
       },
     ],
   },

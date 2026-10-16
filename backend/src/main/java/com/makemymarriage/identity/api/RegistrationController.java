@@ -12,8 +12,6 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.web.csrf.CsrfToken;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -37,14 +35,6 @@ class RegistrationController {
     this.registrationService = registrationService;
     this.emailVerification = emailVerification;
     this.rateLimiter = rateLimiter;
-  }
-
-  @GetMapping("/csrf")
-  ResponseEntity<CsrfResponse> csrf(HttpServletRequest request) {
-    CsrfToken token = (CsrfToken) request.getAttribute(CsrfToken.class.getName());
-    return ResponseEntity.ok()
-        .cacheControl(CacheControl.noStore())
-        .body(new CsrfResponse(token.getToken(), token.getHeaderName()));
   }
 
   @PostMapping("/register")
@@ -73,6 +63,4 @@ class RegistrationController {
     }
     return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).build();
   }
-
-  record CsrfResponse(String token, String headerName) {}
 }

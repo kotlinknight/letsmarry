@@ -1,0 +1,40 @@
+<section class="account-page" aria-labelledby="account-title">
+  <div class="account-card">
+    <p class="eyebrow">Your account</p>
+    <h1 id="account-title">Your planning space</h1>
+
+    @if (auth.user(); as user) {
+      <p class="intro">Welcome back, {{ user.displayName }}.</p>
+      <dl>
+        <div>
+          <dt>Name</dt>
+          <dd>{{ user.displayName }}</dd>
+        </div>
+        <div>
+          <dt>Email address</dt>
+          <dd>{{ user.email }}</dd>
+        </div>
+        <div>
+          <dt>Email verification</dt>
+          <dd>{{ user.emailVerified ? 'Verified' : 'Pending' }}</dd>
+        </div>
+        <div>
+          <dt>Account status</dt>
+          <dd>{{ user.status }}</dd>
+        </div>
+      </dl>
+      <button type="button" (click)="logout()" [disabled]="signingOut()">
+        {{ signingOut() ? 'Signing out…' : 'Sign out' }}
+      </button>
+    } @else if (auth.state() === 'loading') {
+      <p role="status">Checking your session…</p>
+    } @else {
+      <p role="status">We could not check your session. Your account details are hidden for now.</p>
+      <button type="button" (click)="checkSession()">Try again</button>
+    }
+
+    @if (message()) {
+      <p class="notice" role="alert">{{ message() }}</p>
+    }
+  </div>
+</section>
