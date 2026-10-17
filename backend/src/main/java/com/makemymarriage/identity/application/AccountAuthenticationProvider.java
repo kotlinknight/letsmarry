@@ -38,7 +38,7 @@ public class AccountAuthenticationProvider implements AuthenticationProvider {
       throw new BadCredentialsException("Invalid credentials");
     }
     return UsernamePasswordAuthenticationToken.authenticated(
-        new AccountPrincipal(user.getId()),
+        new AccountPrincipal(user.getId(), user.getAuthVersion()),
         null,
         List.of(new SimpleGrantedAuthority("FACTOR_PASSWORD")));
   }

@@ -1,11 +1,14 @@
 package com.makemymarriage;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.jayway.jsonpath.JsonPath;
 import com.makemymarriage.identity.application.AccountPrincipal;
+import com.makemymarriage.identity.application.InvalidPasswordResetTokenException;
 import com.makemymarriage.identity.application.LoginRateLimitException;
 import com.makemymarriage.identity.application.LoginRateLimiter;
+import com.makemymarriage.identity.application.PasswordResetService;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.HttpCookie;
@@ -14,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -28,10 +32,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
+import org.springframework.session.data.redis.RedisIndexedSessionRepository;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -47,12 +54,17 @@ import org.testcontainers.utility.DockerImageName;
     properties = {
       "server.address=127.0.0.1",
       "server.servlet.session.cookie.secure=false",
-      "app.authentication.enabled=true"
+      "app.authentication.enabled=true",
+      "app.password-recovery.enabled=true",
+      "app.password-recovery.rate-limit.reset-ip-hourly=1000",
+      "app.email-outbox.enabled=true"
     })
 @ActiveProfiles("test")
 @Testcontainers
 class AuthenticationIntegrationTests {
   private static final String RATE_KEY = randomKey();
+  private static final String RECOVERY_KEY = randomKey();
+  private static final String OUTBOX_KEY = "v1:" + randomKey();
   private static final String PASSWORD = "SecurePassword123!";
 
   @Container
@@ -72,6 +84,9 @@ class AuthenticationIntegrationTests {
     properties.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
     properties.add("spring.data.redis.password", () -> "");
     properties.add("app.authentication.rate-limit.key", () -> RATE_KEY);
+    properties.add("app.password-recovery.rate-limit.key", () -> RECOVERY_KEY);
+    properties.add("app.email-outbox.active-key-id", () -> "v1");
+    properties.add("app.email-outbox.keys", () -> OUTBOX_KEY);
   }
 
   @LocalServerPort int port;
@@ -80,6 +95,8 @@ class AuthenticationIntegrationTests {
   @Autowired SessionRepository<? extends Session> sessions;
   @Autowired StringRedisTemplate redis;
   @Autowired LoginRateLimiter limiter;
+  @Autowired PasswordResetService resets;
+  @Autowired RedisIndexedSessionRepository indexedSessions;
 
   @Test
   void loginRotatesSessionStoresSafePrincipalAndRequiresFreshCsrf() throws Exception {
@@ -96,7 +113,7 @@ class AuthenticationIntegrationTests {
     assertThat((String) JsonPath.read(response.body(), "$.user.id")).isEqualTo(id.toString());
     assertThat((String) JsonPath.read(response.body(), "$.user.email")).isEqualTo(email);
     assertThat((Boolean) JsonPath.read(response.body(), "$.user.emailVerified")).isTrue();
-    assertThat(response.body()).doesNotContain(PASSWORD, "passwordHash", "SESSION");
+    assertThat(response.body()).doesNotContain(PASSWORD, "passwordHash", "authVersion", "SESSION");
     String newSessionId = sessionId(browser);
     assertThat(newSessionId).isNotEqualTo(oldSessionId);
     assertThat(response.headers().allValues("Set-Cookie"))
@@ -114,7 +131,7 @@ class AuthenticationIntegrationTests {
     assertThat(stored.getMaxInactiveInterval()).isEqualTo(Duration.ofMinutes(30));
     SecurityContext context = stored.getAttribute("SPRING_SECURITY_CONTEXT");
     assertThat(context).isNotNull();
-    assertThat(context.getAuthentication().getPrincipal()).isEqualTo(new AccountPrincipal(id));
+    assertThat(context.getAuthentication().getPrincipal()).isEqualTo(new AccountPrincipal(id, 0L));
     assertThat(context.getAuthentication().getCredentials()).isNull();
 
     assertProblem(login(browser, before, email, PASSWORD), 403, "CSRF_INVALID");
@@ -358,6 +375,183 @@ class AuthenticationIntegrationTests {
     assertThat(REDIS.execInContainer("redis-cli", "ping").getStdout()).contains("PONG");
   }
 
+  @Test
+  void resetChangesPasswordAndRevokesEveryBrowserSession() throws Exception {
+    String email = uniqueEmail();
+    UUID id = insertUser(email, PASSWORD, "ACTIVE", true);
+    Browser first = browser();
+    Browser second = browser();
+    assertThat(login(first, csrf(first), email, PASSWORD).statusCode()).isEqualTo(200);
+    assertThat(login(second, csrf(second), email, PASSWORD).statusCode()).isEqualTo(200);
+    String firstId = decodeSessionId(sessionId(first));
+    String secondId = decodeSessionId(sessionId(second));
+    assertThat(indexedSessions.findByPrincipalName(id.toString()).keySet())
+        .contains(firstId, secondId);
+
+    Browser anonymous = browser();
+    String token = issueToken(id, Instant.now().plus(Duration.ofMinutes(30)));
+    String nextPassword = "Cafe\u0301-and-a-long-new-password";
+    var response = reset(anonymous, csrf(anonymous), token, nextPassword);
+    assertThat(response.statusCode()).isEqualTo(204);
+    assertThat(response.body()).isEmpty();
+    assertThat(response.headers().firstValue("X-Correlation-ID")).isPresent();
+    assertProblem(get(anonymous, "/api/v1/users/me"), 401, "AUTHENTICATION_REQUIRED");
+    assertThat(sessions.findById(firstId)).isNull();
+    assertThat(sessions.findById(secondId)).isNull();
+    assertProblem(get(first, "/api/v1/users/me"), 401, "AUTHENTICATION_REQUIRED");
+    assertProblem(get(second, "/api/v1/users/me"), 401, "AUTHENTICATION_REQUIRED");
+    assertThat(jdbc.queryForObject("select auth_version from users where id = ?", Long.class, id))
+        .isEqualTo(1L);
+    assertThat(
+            encoder.matches(
+                "Caf\u00e9-and-a-long-new-password",
+                jdbc.queryForObject(
+                    "select password_hash from users where id = ?", String.class, id)))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from password_reset_tokens where user_id = ? and consumed_at is not null",
+                Integer.class,
+                id))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from email_outbox where purpose_id = ? and template_code = 'PASSWORD_CHANGED'",
+                Integer.class,
+                id))
+        .isEqualTo(1);
+    Browser oldPassword = browser();
+    assertProblem(
+        login(oldPassword, csrf(oldPassword), email, PASSWORD), 401, "INVALID_CREDENTIALS");
+    Browser fresh = browser();
+    assertThat(login(fresh, csrf(fresh), email, "Caf\u00e9-and-a-long-new-password").statusCode())
+        .isEqualTo(200);
+    assertThat(get(fresh, "/api/v1/users/me").statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void invalidExpiredRevokedReusedAndIneligibleTokensAreGeneric() throws Exception {
+    Browser browser = browser();
+    Csrf csrf = csrf(browser);
+    String next = "ReplacementPassword123!";
+    assertProblem(reset(browser, csrf, "invalid", next), 400, "PASSWORD_RESET_TOKEN_INVALID");
+    assertProblem(reset(browser, null, "invalid", next), 403, "CSRF_INVALID");
+    assertProblem(postReset(browser, csrf, "{"), 400, "MALFORMED_JSON");
+    UUID expiredUser = insertUser(uniqueEmail(), PASSWORD, "ACTIVE", true);
+    assertProblem(
+        reset(browser, csrf, issueToken(expiredUser, Instant.now().minusSeconds(1)), next),
+        400,
+        "PASSWORD_RESET_TOKEN_INVALID");
+    UUID revokedUser = insertUser(uniqueEmail(), PASSWORD, "ACTIVE", true);
+    String revoked = issueToken(revokedUser, Instant.now().plusSeconds(1800));
+    jdbc.update(
+        "update password_reset_tokens set revoked_at = now() where user_id = ?", revokedUser);
+    assertProblem(reset(browser, csrf, revoked, next), 400, "PASSWORD_RESET_TOKEN_INVALID");
+    for (String status : new String[] {"SUSPENDED", "DEACTIVATED"}) {
+      UUID user = insertUser(uniqueEmail(), PASSWORD, status, true);
+      assertProblem(
+          reset(browser, csrf, issueToken(user, Instant.now().plusSeconds(1800)), next),
+          400,
+          "PASSWORD_RESET_TOKEN_INVALID");
+    }
+    UUID unverified = insertUser(uniqueEmail(), PASSWORD, "ACTIVE", false);
+    assertProblem(
+        reset(browser, csrf, issueToken(unverified, Instant.now().plusSeconds(1800)), next),
+        400,
+        "PASSWORD_RESET_TOKEN_INVALID");
+    UUID eligible = insertUser(uniqueEmail(), PASSWORD, "ACTIVE", true);
+    String usable = issueToken(eligible, Instant.now().plusSeconds(1800));
+    assertProblem(reset(browser, csrf, usable, "short"), 422, "VALIDATION_ERROR");
+    assertThat(reset(browser, csrf, usable, next).statusCode()).isEqualTo(204);
+    assertProblem(reset(browser, csrf, usable, next), 400, "PASSWORD_RESET_TOKEN_INVALID");
+  }
+
+  @Test
+  void concurrentResetConsumesTokenOnlyOnce() {
+    UUID id = insertUser(uniqueEmail(), PASSWORD, "ACTIVE", true);
+    String token = issueToken(id, Instant.now().plusSeconds(1800));
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var attempts =
+          java.util.stream.IntStream.range(0, 2)
+              .mapToObj(
+                  ignored ->
+                      CompletableFuture.supplyAsync(
+                          () -> {
+                            try {
+                              resets.reset(token, "ConcurrentNewPassword123!");
+                              return true;
+                            } catch (InvalidPasswordResetTokenException exception) {
+                              return false;
+                            }
+                          },
+                          executor))
+              .toList();
+      assertThat(attempts.stream().filter(future -> future.join()).count()).isEqualTo(1);
+    }
+    assertThat(jdbc.queryForObject("select auth_version from users where id = ?", Long.class, id))
+        .isEqualTo(1L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from email_outbox where purpose_id = ? and template_code = 'PASSWORD_CHANGED'",
+                Integer.class,
+                id))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void outboxFailureRollsBackPasswordTokenAndVersion() {
+    UUID id = insertUser(uniqueEmail(), PASSWORD, "ACTIVE", true);
+    String token = issueToken(id, Instant.now().plusSeconds(1800));
+    jdbc.execute(
+        "alter table email_outbox add constraint test_reject_password_changed check (template_code <> 'PASSWORD_CHANGED')");
+    try {
+      assertThatThrownBy(() -> resets.reset(token, "AnotherSecurePassword123!"))
+          .isInstanceOf(org.springframework.dao.DataAccessException.class);
+    } finally {
+      jdbc.execute("alter table email_outbox drop constraint test_reject_password_changed");
+    }
+    assertThat(jdbc.queryForObject("select auth_version from users where id = ?", Long.class, id))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select consumed_at from password_reset_tokens where user_id = ?",
+                Instant.class,
+                id))
+        .isNull();
+    assertThat(
+            encoder.matches(
+                PASSWORD,
+                jdbc.queryForObject(
+                    "select password_hash from users where id = ?", String.class, id)))
+        .isTrue();
+  }
+
+  @Test
+  void legacyAndStaleSessionsFailEvenWhenRedisStillContainsThem() throws Exception {
+    String email = uniqueEmail();
+    UUID id = insertUser(email, PASSWORD, "ACTIVE", true);
+    Browser legacy = browser();
+    assertThat(login(legacy, csrf(legacy), email, PASSWORD).statusCode()).isEqualTo(200);
+    String legacyId = decodeSessionId(sessionId(legacy));
+    Session stored = sessions.findById(legacyId);
+    SecurityContext context = SecurityContextHolder.createEmptyContext();
+    context.setAuthentication(
+        UsernamePasswordAuthenticationToken.authenticated(
+            new AccountPrincipal(id), null, java.util.List.of()));
+    stored.setAttribute("SPRING_SECURITY_CONTEXT", context);
+    saveSession(stored);
+    assertProblem(get(legacy, "/api/v1/users/me"), 401, "AUTHENTICATION_REQUIRED");
+    assertThat(sessions.findById(legacyId)).isNull();
+
+    Browser stale = browser();
+    assertThat(login(stale, csrf(stale), email, PASSWORD).statusCode()).isEqualTo(200);
+    String staleId = decodeSessionId(sessionId(stale));
+    jdbc.update("update users set auth_version = auth_version + 1 where id = ?", id);
+    assertThat(sessions.findById(staleId)).isNotNull();
+    assertProblem(get(stale, "/api/v1/users/me"), 401, "AUTHENTICATION_REQUIRED");
+    assertThat(sessions.findById(staleId)).isNull();
+  }
+
   @SuppressWarnings("unchecked")
   private void saveSession(Session session) {
     ((SessionRepository<Session>) sessions).save(session);
@@ -379,6 +573,40 @@ class AuthenticationIntegrationTests {
         status,
         verified ? Timestamp.from(Instant.now()) : null);
     return id;
+  }
+
+  private String issueToken(UUID userId, Instant expiresAt) {
+    byte[] bytes = new byte[32];
+    new SecureRandom().nextBytes(bytes);
+    String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    try {
+      jdbc.update(
+          "insert into password_reset_tokens (id,user_id,token_hash,created_at,expires_at) values (?,?,?,?,?)",
+          UUID.randomUUID(),
+          userId,
+          MessageDigest.getInstance("SHA-256").digest(bytes),
+          Timestamp.from(expiresAt.minus(Duration.ofMinutes(30))),
+          Timestamp.from(expiresAt));
+      return token;
+    } catch (java.security.NoSuchAlgorithmException exception) {
+      throw new IllegalStateException(exception);
+    }
+  }
+
+  private HttpResponse<String> reset(Browser browser, Csrf csrf, String token, String newPassword)
+      throws Exception {
+    return postReset(
+        browser, csrf, "{\"token\":\"" + token + "\",\"newPassword\":\"" + newPassword + "\"}");
+  }
+
+  private HttpResponse<String> postReset(Browser browser, Csrf csrf, String body) throws Exception {
+    var request =
+        HttpRequest.newBuilder(uri("/api/v1/auth/password/reset"))
+            .timeout(Duration.ofSeconds(15))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
+    if (csrf != null) request.header(csrf.headerName(), csrf.token());
+    return browser.http().send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
   private Browser browser() {

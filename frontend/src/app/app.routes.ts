@@ -43,6 +43,22 @@ export const routes: Routes = [
           import('./features/auth/login.component').then((module) => module.LoginComponent),
       },
       {
+        path: 'forgot-password',
+        title: 'Forgot password | Make My Marriage',
+        loadComponent: () =>
+          import('./features/password-recovery/forgot-password.component').then(
+            (module) => module.ForgotPasswordComponent,
+          ),
+      },
+      {
+        path: 'reset-password',
+        title: 'Reset password | Make My Marriage',
+        loadComponent: () =>
+          import('./features/password-recovery/reset-password.component').then(
+            (module) => module.ResetPasswordComponent,
+          ),
+      },
+      {
         path: 'account',
         title: 'Your account | Make My Marriage',
         canActivate: [authGuard],

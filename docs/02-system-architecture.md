@@ -2,7 +2,7 @@
 
 **Status:** MVP architecture baseline  
 **Version:** 1.0  
-**Last updated:** 2026-10-13
+**Last updated:** 2026-10-16
 
 **Architectural style:** Spring Boot modular monolith, enforced by Spring Modulith  
 **Frontend:** Angular single-page application  
@@ -234,6 +234,14 @@ The frontend may hide unavailable features, but every endpoint verifies authoriz
 **Accepted ADR:** [ADR-007](adr/ADR-007-redis-sessions.md) replaces the provisional JWT/refresh design. The initial inactivity timeout is 30 minutes, with multiple browser sessions allowed; logout invalidates only the current session, and ineligible accounts lose access on their next protected request. External OIDC, social login and passwordless links are potential later options.
 
 Stage 1C-A adds a default-off `app.authentication.enabled` gate independent of registration and outbox gates. The gate has no profile restriction, so a future approved production rollout can enable login while public registration remains disabled. The always-available `GET /auth/csrf` bootstrap is independent of those gates and grants no authenticated access. A successful login requires both `users.status=ACTIVE` and `email_verified_at IS NOT NULL`; unknown, incorrect, unverified, suspended, and deactivated attempts get the same generic response. Redis-backed rate limits count every attempt by HMAC-keyed normalized email and direct IP and fail closed. Stage 1C-B keeps only the stable account ID in the session principal. A Spring Security filter checks PostgreSQL on each protected request, stores the safe current account snapshot for that request, and invalidates an ineligible session before application code runs. See the [1C-A](implementation/milestone-1c-a-authentication.md) and [1C-B](implementation/milestone-1c-b-session-lifecycle.md) notes.
+
+Stage 1D-A adds a separate 30-minute password-reset token lifecycle in `identity` and a non-null `users.auth_version` initialized to zero for retained accounts. Only verified, `ACTIVE` users can receive or consume an internal reset token. Token issuance, replacement, revocation, and consumption are internal operations. At the 1D-A handoff there was no recovery endpoint, email, password update, or session-version check. Stage 1D-C must update the password hash, consume the token, and increment `auth_version` atomically, then compare the authenticated session version with PostgreSQL on protected requests. Legacy sessions without a version must require reauthentication when enforcement starts; Redis deletion is supplemental. See [ADR-015](adr/ADR-015-password-recovery-tokens.md) and the [1D-A note](implementation/milestone-1d-a-password-reset-tokens.md).
+
+Stage 1D-B adds a separately gated local/test `POST /auth/password/forgot`. A verified `ACTIVE` account receives a replacement reset token and encrypted `PASSWORD_RESET` outbox job atomically; unknown and ineligible accounts receive the same empty `202`. Identity still owns token and account eligibility, exposed to the notification worker through its existing public eligibility contract. The worker checks the purpose before SMTP, uses the existing lease/retry/purge path, and sends through the existing Mailpit adapter. Redis applies independent HMAC-keyed account cooldown/daily and direct-IP limits before database work; failure closes the request. A minimum response duration reduces obvious eligibility timing differences. No reset submission, password mutation, or session-version enforcement exists yet. See the [1D-B note](implementation/milestone-1d-b-forgot-password.md).
+
+Stage 1D-C adds a local/test-only `POST /auth/password/reset` under the same independent recovery/outbox gates. The identity transaction consumes the hash-only token, updates the normalized PBKDF2 password, increments `users.auth_version`, cancels pending reset mail, and enqueues a token-free `PASSWORD_CHANGED` notice through the existing encrypted outbox. A failed outbox insert rolls back all changes. Login captures the PostgreSQL version in a UUID-named session principal; every protected request rereads account standing and version. Missing legacy versions and stale versions invalidate their sessions. Spring Session 4.1.1's indexed Redis repository allows best-effort deletion of UUID-indexed sessions after commit, but PostgreSQL version comparison is the access boundary even when cleanup fails or an older session lacks an index. Requests already authorized before the commit may finish; later protected requests fail. See [ADR-007](adr/ADR-007-redis-sessions.md), [ADR-015](adr/ADR-015-password-recovery-tokens.md), and the [1D-C note](implementation/milestone-1d-c-password-reset.md).
+
+Stage 1D-D adds Angular `/forgot-password` and `/reset-password` routes using the existing same-origin API proxy, anonymous Redis-session CSRF bootstrap, semantic Light/Dark tokens, and no browser-side credential storage. The reset token is read from the URL fragment and removed from history immediately; an active reset route also scrubs fragments introduced by later same-page navigation. The browser sends it only to the reset endpoint after explicit form submission. A confirmed `204` clears cached Angular account data, while `/users/me` remains the source of truth for old-session rejection and protected-route redirection after a reset. See the [1D-D note](implementation/milestone-1d-d-angular-password-recovery.md).
 
 ### Security rules
 
@@ -493,6 +501,7 @@ Later: OpenTelemetry distributed context, Prometheus collection, Grafana dashboa
 | [ADR-007](adr/ADR-007-redis-sessions.md) | Spring Session + Redis with HttpOnly cookie and CSRF | Accepted; replaces provisional planner JWT/refresh |
 | ADR-008 | Private object storage with short-lived signed URLs | Accepted |
 | [ADR-009](adr/ADR-009-email-outbox.md) | Provider-neutral email + one PostgreSQL transactional outbox | Accepted |
+| [ADR-015](adr/ADR-015-password-recovery-tokens.md) | Separate reset-token lifecycle and staged session-version enforcement | Accepted for 1D-A foundation |
 | ADR-010 | Docker Compose local + GitHub Actions CI | Accepted |
 | ADR-011 | Cloud host and India region | Deferred |
 | ADR-012 | Kubernetes/AKS and Infrastructure as Code | Deferred |

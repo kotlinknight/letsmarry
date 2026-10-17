@@ -183,4 +183,16 @@ describe('AuthService', () => {
     http.expectOne('/api/v1/users/me').flush(user);
     expect(await failed).toBe('csrf-invalid');
   });
+
+  it('does not restore stale account data after a confirmed password reset', async () => {
+    const restore = auth.refresh();
+    const pending = http.expectOne('/api/v1/users/me');
+    auth.clearAfterPasswordReset();
+    expect(auth.state()).toBe('unauthenticated');
+    expect(auth.user()).toBeNull();
+    pending.flush(user);
+    await restore;
+    expect(auth.state()).toBe('unauthenticated');
+    expect(auth.user()).toBeNull();
+  });
 });

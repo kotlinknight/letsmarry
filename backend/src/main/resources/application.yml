@@ -31,6 +31,7 @@ spring:
     data:
       redis:
         namespace: makemymarriage:session
+        repository-type: indexed
   mail:
     properties:
       "[mail.smtp.connectiontimeout]": 5000
@@ -80,6 +81,16 @@ app:
       key: ${VERIFICATION_RATE_LIMIT_KEY:}
       resend-ip-hourly: ${VERIFICATION_RESEND_IP_HOURLY:30}
       verify-ip-hourly: ${VERIFICATION_VERIFY_IP_HOURLY:20}
+  password-recovery:
+    enabled: ${PASSWORD_RECOVERY_ENABLED:false}
+    frontend-url: ${PASSWORD_RECOVERY_FRONTEND_URL:http://127.0.0.1:4200/reset-password}
+    response-floor-ms: ${PASSWORD_RECOVERY_RESPONSE_FLOOR_MS:250}
+    rate-limit:
+      key: ${PASSWORD_RECOVERY_RATE_LIMIT_KEY:}
+      cooldown-seconds: ${PASSWORD_RECOVERY_COOLDOWN_SECONDS:300}
+      email-daily: ${PASSWORD_RECOVERY_EMAIL_DAILY:3}
+      ip-hourly: ${PASSWORD_RECOVERY_IP_HOURLY:30}
+      reset-ip-hourly: ${PASSWORD_RECOVERY_RESET_IP_HOURLY:20}
   mail:
     from: ${MAIL_FROM:}
   email-outbox:

@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
   title: Make My Marriage API
-  version: 1.0.0-1c-b
-  description: Stage 1C-B adds current-user retrieval, server-side logout, and session revalidation.
+  version: 1.0.0-1d-c
+  description: Stage 1D-C adds local/test-only password reset and durable session revocation.
 servers:
   - url: /api/v1
 paths:
@@ -283,6 +283,101 @@ paths:
           $ref: '#/components/responses/VerificationRateLimited'
         '503':
           $ref: '#/components/responses/VerificationUnavailable'
+  /auth/password/forgot:
+    post:
+      tags: [Password recovery]
+      operationId: requestPasswordReset
+      summary: Request a password-reset email without disclosing account existence
+      description: >-
+        Local/test only when the independent password-recovery and existing email-outbox
+        gates are enabled. Requires the anonymous SESSION cookie and matching CSRF header.
+        A valid email always receives an empty 202, including unknown, unverified, suspended,
+        deactivated, and email-limited accounts. An eligible account receives a 30-minute
+        hash-only reset token and an encrypted PASSWORD_RESET outbox job in one transaction.
+        Replacement revokes the old token and purges an older pending job; an in-flight
+        email may still arrive with an unusable link. The configured frontend link carries
+        the token in its URL fragment. No password or authenticated session changes here.
+        A minimum response duration reduces obvious account-existence timing differences.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+      responses:
+        '202':
+          description: Request accepted without account disclosure; no response body.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+        '400':
+          $ref: '#/components/responses/MalformedJson'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '404':
+          description: Password-recovery or outbox feature gate is disabled; endpoint absent.
+        '422':
+          $ref: '#/components/responses/ForgotPasswordValidationError'
+        '429':
+          $ref: '#/components/responses/PasswordRecoveryRateLimited'
+        '503':
+          $ref: '#/components/responses/PasswordRecoveryUnavailable'
+  /auth/password/reset:
+    post:
+      tags: [Password recovery]
+      operationId: resetPassword
+      summary: Consume a reset token and change the account password
+      description: >-
+        Local/test only with independent password-recovery and email-outbox gates.
+        Requires a SESSION cookie and CSRF header. A valid single-use 30-minute token
+        for a verified ACTIVE account atomically changes the NFC-normalized PBKDF2
+        password hash, consumes the token, increments users.auth_version, and enqueues
+        a PASSWORD_CHANGED notification. All older authenticated sessions are rejected
+        by PostgreSQL version comparison; indexed Redis cleanup after commit is best effort.
+        The request does not authenticate the caller. Reset attempts are limited to
+        20 per direct IP per hour by default.
+      security:
+        - anonymousSession: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '204':
+          description: Password changed; no automatic login and no response body.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-store
+            X-Correlation-ID:
+              $ref: '#/components/headers/CorrelationId'
+        '400':
+          description: Malformed JSON or invalid, expired, revoked, ineligible, or used token; generic Problem Details.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          $ref: '#/components/responses/CsrfInvalid'
+        '404':
+          description: Password-recovery or outbox feature gate is disabled; endpoint absent.
+        '422':
+          $ref: '#/components/responses/ResetPasswordValidationError'
+        '429':
+          $ref: '#/components/responses/PasswordRecoveryRateLimited'
+        '503':
+          $ref: '#/components/responses/PasswordRecoveryUnavailable'
 components:
   securitySchemes:
     anonymousSession:
@@ -435,6 +530,30 @@ components:
           format: email
           maxLength: 320
           description: Trimmed and lowercased before account lookup.
+    ForgotPasswordRequest:
+      type: object
+      additionalProperties: true
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Trimmed and lowercased before limiting and lookup.
+    ResetPasswordRequest:
+      type: object
+      additionalProperties: true
+      required: [token, newPassword]
+      properties:
+        token:
+          type: string
+          description: Opaque 32-byte base64url token from the URL fragment; never log it.
+        newPassword:
+          type: string
+          format: password
+          description: >-
+            Required; 15 to 128 Unicode code points after NFC normalization, with
+            no control characters and no trimming or composition rule.
     FieldError:
       type: object
       required: [field, code, message]
@@ -471,6 +590,42 @@ components:
           items:
             $ref: '#/components/schemas/FieldError'
   responses:
+    ResetPasswordValidationError:
+      description: New password violates the shared password policy (VALIDATION_ERROR).
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ForgotPasswordValidationError:
+      description: Valid JSON with an invalid email (VALIDATION_ERROR).
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PasswordRecoveryRateLimited:
+      description: Direct-IP limit exceeded (PASSWORD_RECOVERY_RATE_LIMITED); email limits still return 202.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PasswordRecoveryUnavailable:
+      description: Required Redis rate limiter or storage is unavailable (PASSWORD_RECOVERY_TEMPORARILY_UNAVAILABLE).
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     AuthenticationRequired:
       description: Session is absent, expired, invalidated, or no longer eligible.
       headers:

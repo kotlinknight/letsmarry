@@ -44,16 +44,43 @@ class SmtpEmailSender implements EmailSender {
 
   @Override
   public SendReceipt send(EmailDelivery delivery) {
-    if (!"VERIFY_EMAIL".equals(delivery.templateCode())) {
+    if ("PASSWORD_CHANGED".equals(delivery.templateCode())) {
+      try {
+        if (!mapper.readTree(delivery.payloadJson()).isObject()) {
+          throw new IllegalArgumentException();
+        }
+        new InternetAddress(delivery.recipientEmail(), true).validate();
+      } catch (Exception exception) {
+        throw new EmailSendException(true);
+      }
+      return sendMessage(
+          delivery,
+          "Your Make My Marriage password was changed",
+          "Your Make My Marriage password was changed.\n\n"
+              + "If you did not make this change, contact support immediately and secure your email account.\n",
+          """
+          <!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;color:#292335">
+          <div style="max-width:560px;margin:auto;padding:24px">
+          <h1 style="color:#db665e">Make My Marriage</h1>
+          <h2>Your password was changed</h2>
+          <p>Your Make My Marriage password was changed.</p>
+          <p>If you did not make this change, contact support immediately and secure your email account.</p>
+          </div></body></html>
+          """);
+    }
+    boolean reset = "PASSWORD_RESET".equals(delivery.templateCode());
+    if (!reset && !"VERIFY_EMAIL".equals(delivery.templateCode())) {
       throw new EmailSendException(true);
     }
     String url;
     try {
       var payload = mapper.readTree(delivery.payloadJson());
-      url = payload.path("verificationUrl").asText();
+      url = payload.path(reset ? "resetUrl" : "verificationUrl").asText();
       URI parsed = URI.create(url);
-      if (!"token"
-              .equals(parsed.getFragment() == null ? null : parsed.getFragment().split("=", 2)[0])
+      String fragment = parsed.getFragment();
+      if (fragment == null
+          || !(reset ? fragment.matches("token=[A-Za-z0-9_-]{43}") : fragment.startsWith("token="))
+          || parsed.getUserInfo() != null
           || !("https".equals(parsed.getScheme())
               || ("http".equals(parsed.getScheme())
                   && ("localhost".equals(parsed.getHost())
@@ -67,31 +94,62 @@ class SmtpEmailSender implements EmailSender {
 
     String safeUrl =
         url.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;");
-    String plain =
-        "Verify your Make My Marriage email address\n\n"
-            + "Open this link, then select Confirm email address:\n"
-            + url
-            + "\n\n"
-            + "This link expires in 24 hours. If you did not request this, ignore this email.\n";
-    String html =
-        """
-        <!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;color:#292335">
-        <div style="max-width:560px;margin:auto;padding:24px">
-        <h1 style="color:#db665e">Make My Marriage</h1>
-        <h2>Verify your email address</h2>
-        <p>Open the link below, then select <strong>Confirm email address</strong>.</p>
-        <p><a style="display:inline-block;background:#db665e;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none"
-        href="%s">Verify email</a></p>
-        <p>This link expires in 24 hours. If you did not request this, ignore this email.</p>
-        </div></body></html>
-        """
-            .formatted(safeUrl);
+    String plain;
+    String html;
+    String subject;
+    if (reset) {
+      subject = "Reset your Make My Marriage password";
+      plain =
+          "Reset your Make My Marriage password\n\n"
+              + "Open this link to set a new password:\n"
+              + url
+              + "\n\nThis link expires in 30 minutes. If you did not request this, ignore this email.\n";
+      html =
+          """
+          <!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;color:#292335">
+          <div style="max-width:560px;margin:auto;padding:24px">
+          <h1 style="color:#db665e">Make My Marriage</h1>
+          <h2>Reset your password</h2>
+          <p>Open the link below to set a new password.</p>
+          <p><a style="display:inline-block;background:#db665e;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none"
+          href="%s">Reset password</a></p>
+          <p>This link expires in 30 minutes. If you did not request this, ignore this email.</p>
+          </div></body></html>
+          """
+              .formatted(safeUrl);
+    } else {
+      subject = "Verify your Make My Marriage email";
+      plain =
+          "Verify your Make My Marriage email address\n\n"
+              + "Open this link, then select Confirm email address:\n"
+              + url
+              + "\n\n"
+              + "This link expires in 24 hours. If you did not request this, ignore this email.\n";
+      html =
+          """
+          <!doctype html><html lang="en"><body style="font-family:Arial,sans-serif;color:#292335">
+          <div style="max-width:560px;margin:auto;padding:24px">
+          <h1 style="color:#db665e">Make My Marriage</h1>
+          <h2>Verify your email address</h2>
+          <p>Open the link below, then select <strong>Confirm email address</strong>.</p>
+          <p><a style="display:inline-block;background:#db665e;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none"
+          href="%s">Verify email</a></p>
+          <p>This link expires in 24 hours. If you did not request this, ignore this email.</p>
+          </div></body></html>
+          """
+              .formatted(safeUrl);
+    }
+    return sendMessage(delivery, subject, plain, html);
+  }
+
+  private SendReceipt sendMessage(
+      EmailDelivery delivery, String subject, String plain, String html) {
     try {
       var message = mail.createMimeMessage();
       var helper = new MimeMessageHelper(message, true, "UTF-8");
       helper.setFrom(from);
       helper.setTo(delivery.recipientEmail());
-      helper.setSubject("Verify your Make My Marriage email");
+      helper.setSubject(subject);
       helper.setText(plain, html);
       message.setHeader("X-Delivery-ID", delivery.deliveryId().toString());
       mail.send(message);

@@ -29,6 +29,7 @@ public class CurrentAccountService implements AccountSessionValidator {
         user.getDisplayName(),
         user.getEmail(),
         user.getEmailVerifiedAt() != null,
-        user.getStatus().name());
+        user.getStatus().name(),
+        user.getAuthVersion());
   }
 }

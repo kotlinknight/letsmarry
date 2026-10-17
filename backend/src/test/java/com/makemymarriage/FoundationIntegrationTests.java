@@ -21,7 +21,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
-import org.springframework.session.data.redis.RedisSessionRepository;
+import org.springframework.session.data.redis.RedisIndexedSessionRepository;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -130,13 +130,17 @@ class FoundationIntegrationTests {
   @Test
   void flywayCreatesAndValidatesIdentityTables() {
     assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
-    assertThat(flyway.info().all()).hasSize(4);
+    assertThat(flyway.info().all()).hasSize(5);
     assertThat(
             jdbc.queryForList(
                 "select table_name from information_schema.tables where table_schema = 'public'",
                 String.class))
         .containsExactlyInAnyOrder(
-            "flyway_schema_history", "users", "email_verification_tokens", "email_outbox");
+            "flyway_schema_history",
+            "users",
+            "email_verification_tokens",
+            "email_outbox",
+            "password_reset_tokens");
     assertThat(environment.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
     assertThat(jdbc.queryForObject("show timezone", String.class)).isEqualTo("UTC");
   }
@@ -162,7 +166,12 @@ class FoundationIntegrationTests {
                 .content("{}"))
         .andExpect(status().isNotFound());
     for (String path :
-        new String[] {"/api/v1/auth/email/verify", "/api/v1/auth/email/verification-requests"}) {
+        new String[] {
+          "/api/v1/auth/email/verify",
+          "/api/v1/auth/email/verification-requests",
+          "/api/v1/auth/password/forgot",
+          "/api/v1/auth/password/reset"
+        }) {
       MockMvcBuilders.webAppContextSetup(webApplicationContext)
           .apply(springSecurity())
           .build()
@@ -179,7 +188,7 @@ class FoundationIntegrationTests {
 
   @Test
   void sessionsRoundTripThroughRedisAndCanBeInvalidated() {
-    assertThat(sessions).isInstanceOf(RedisSessionRepository.class);
+    assertThat(sessions).isInstanceOf(RedisIndexedSessionRepository.class);
     assertSessionRoundTrip(sessions);
   }
 

@@ -38,16 +38,25 @@ export class AuthService {
   private readonly currentState = signal<SessionState>('unknown');
   private readonly currentUser = signal<CurrentUser | null>(null);
   private restoreInFlight: Promise<void> | null = null;
+  private sessionEpoch = 0;
 
   readonly state = this.currentState.asReadonly();
   readonly user = this.currentUser.asReadonly();
   readonly isAuthenticated = computed(() => this.currentState() === 'authenticated');
 
+  clearAfterPasswordReset(): void {
+    // A confirmed reset invalidates this browser's prior login along with every other one.
+    this.sessionEpoch += 1;
+    this.currentUser.set(null);
+    this.currentState.set('unauthenticated');
+  }
+
   async refresh(): Promise<void> {
     if (this.restoreInFlight) return this.restoreInFlight;
     this.currentState.set('loading');
     this.currentUser.set(null);
-    this.restoreInFlight = this.fetchCurrentUser().finally(() => {
+    const epoch = ++this.sessionEpoch;
+    this.restoreInFlight = this.fetchCurrentUser(epoch).finally(() => {
       this.restoreInFlight = null;
     });
     return this.restoreInFlight;
@@ -115,9 +124,10 @@ export class AuthService {
     }
   }
 
-  private async fetchCurrentUser(): Promise<void> {
+  private async fetchCurrentUser(epoch: number): Promise<void> {
     try {
       const user = await firstValueFrom(this.api.currentUser());
+      if (epoch !== this.sessionEpoch) return;
       if (!isCurrentUser(user)) {
         this.currentState.set('unavailable');
         return;
@@ -125,6 +135,7 @@ export class AuthService {
       this.currentUser.set(user);
       this.currentState.set('authenticated');
     } catch (error) {
+      if (epoch !== this.sessionEpoch) return;
       this.currentState.set(
         error instanceof HttpErrorResponse && error.status === 401
           ? 'unauthenticated'

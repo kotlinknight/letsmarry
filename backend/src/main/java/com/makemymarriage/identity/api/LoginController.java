@@ -59,6 +59,10 @@ class LoginController {
         currentAccounts
             .findEligibleAccount(((AccountPrincipal) authentication.getPrincipal()).id())
             .orElseThrow(() -> new BadCredentialsException("Invalid credentials"));
+    if (((AccountPrincipal) authentication.getPrincipal()).authVersion().longValue()
+        != account.authVersion()) {
+      throw new BadCredentialsException("Invalid credentials");
+    }
     sessionStrategy.onAuthentication(authentication, request, response);
     var context = SecurityContextHolder.createEmptyContext();
     context.setAuthentication(authentication);

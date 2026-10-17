@@ -2,14 +2,14 @@
 
 **Status:** MVP endpoint contract baseline  
 **Version:** 1.0  
-**Last updated:** 2026-10-13
+**Last updated:** 2026-10-16
 
 **Base path:** `/api/v1`  
 **Backend:** Spring Boot + Spring Security  
 **Frontend:** Angular + generated/typed OpenAPI client  
 **Format:** JSON, RFC 9457 Problem Details for errors
 
-> This is the broader MVP API **design document**. The implemented 1A and 1B-C endpoints have a machine-readable [OpenAPI 3.0.3 contract](api/openapi.yaml); other catalog entries remain plans, not deployed endpoints. Stages 1B-A and 1B-B added internal token and outbox infrastructure only.
+> This is the broader MVP API **design document**. The implemented account endpoints through Stage 1D-C have a machine-readable [OpenAPI 3.0.3 contract](api/openapi.yaml); other catalog entries remain plans, not deployed endpoints.
 
 ## 1. API principles
 
@@ -81,8 +81,8 @@ Cookie: SESSION=<opaque-session-id>
 | POST | `/auth/logout` | **Implemented 1C-B:** CSRF-protected current-session invalidation and cookie expiry |
 | POST | `/auth/email/verify` | **Implemented 1B-C:** consume token and verify email |
 | POST | `/auth/email/verification-requests` | **Implemented 1B-C:** generic resend request |
-| POST | `/auth/password/forgot` | Request password reset; non-enumerating response |
-| POST | `/auth/password/reset` | Reset with valid token |
+| POST | `/auth/password/forgot` | **Implemented 1D-B:** gated, generic reset-email request |
+| POST | `/auth/password/reset` | **Implemented 1D-C:** consume token, change password, revoke prior sessions |
 | GET | `/users/me` | **Implemented 1C-B:** fresh verified, ACTIVE account details |
 
 Example register:
@@ -111,6 +111,12 @@ Response `201 Created`:
 Registration requires the `local` or `test` profile plus `app.registration.enabled=true` and `app.email-outbox.enabled=true`; the default flags are false. The gated endpoints are absent (`404`) when disabled. Registration trims the display name (1–150 characters) and lowercases/trims the email (valid address, at most 320 characters). The password is NFC-normalized without trimming, must contain 15–128 Unicode code points, and cannot contain control characters. No character-composition rule is imposed. The response has no `Location` header because there is no addressable resource for the newly registered user; `/users/me` requires login. Registration atomically creates an `ACTIVE` but unverified user, a 24-hour hash-only token, and an encrypted outbox job; it does not log in, call SMTP in the request transaction, or create a wedding. The opt-in local worker delivers through Mailpit later. `400` means malformed JSON, `422` invalid fields, `409` duplicate email, and `403` missing/invalid CSRF. Errors use RFC 9457 Problem Details with a stable `code`, server-generated `correlationId`, and matching `X-Correlation-ID` header. Duplicate-email `409` still needs an account-enumeration review before public signup.
 
 `POST /api/v1/auth/email/verify` accepts `{ "token": "<opaque-token>" }`; valid, unexpired, unrevoked, unused tokens return `204` and atomically set `users.email_verified_at` plus consumption time. Account status remains `ACTIVE`; suspended accounts cannot verify. Invalid, expired, revoked, reused, and ineligible tokens all return generic `400 VERIFICATION_TOKEN_INVALID`. `POST /api/v1/auth/email/verification-requests` accepts `{ "email": "anjali@example.com" }`, normalizes the email, and returns an empty `202` for any syntactically valid address, whether eligible or not, including an email-specific rate limit. An eligible 1A account receives its first token; a later allowed request revokes its old token, purges the old pending job where possible, and enqueues a replacement atomically. A processing email may still arrive with an invalid link. Both POSTs require the anonymous `SESSION` cookie and CSRF header from `GET /auth/csrf`; neither authenticates the requester. Stage 1B-D adds a five-minute per-email resend cooldown, three resends per rolling day, a configurable direct-IP-wide resend ceiling (30/hour default), and a verification-attempt ceiling (20/hour default). IP-wide excess returns generic `429 VERIFICATION_RATE_LIMITED`; Redis failures return `503 VERIFICATION_TEMPORARILY_UNAVAILABLE` before touching tokens. Redis keys contain keyed HMAC digests, not plaintext addresses. See the [OpenAPI contract](api/openapi.yaml) and [1B-D note](implementation/milestone-1b-d-mailpit-integration.md).
+
+Stage 1D-B `POST /api/v1/auth/password/forgot` accepts `{ "email": "anjali@example.com" }`, trims/lowercases the address, and requires the anonymous session and CSRF header. Valid addresses receive the same empty, no-store `202` whether the account is eligible, absent, unverified, suspended, deactivated, or subject to an email-specific limit. Only verified `ACTIVE` accounts get a 30-minute token and encrypted `PASSWORD_RESET` outbox job. The endpoint requires independent `app.password-recovery.enabled=true` and the existing outbox flag, plus `local` or `test` without `production`; otherwise it is absent. Initial configurable limits are one request per normalized email per five minutes, three per email per rolling day, and 30 per direct IP per hour. Email and IP Redis keys are HMAC-derived; direct-IP excess returns `429 PASSWORD_RECOVERY_RATE_LIMITED`, and Redis/storage failure returns `503 PASSWORD_RECOVERY_TEMPORARILY_UNAVAILABLE`. Malformed JSON returns `400`, invalid fields `422`, and missing CSRF `403`, all as Problem Details with correlation IDs. A configurable 250 ms response floor reduces obvious timing differences for `202` responses; no absolute timing equivalence is promised. Stage 1D-B does not change a password or session. See [OpenAPI](api/openapi.yaml) and the [stage note](implementation/milestone-1d-b-forgot-password.md).
+
+Stage 1D-C `POST /api/v1/auth/password/reset` accepts `{ "token": "<opaque-token>", "newPassword": "<new-password>" }` under the same local/test recovery and outbox gates, independent of registration/login gates. It requires the anonymous session and CSRF header. Success returns empty no-store `204` without logging in. Invalid, expired, revoked, used, and ineligible tokens share `400 PASSWORD_RESET_TOKEN_INVALID`; invalid password policy returns `422 VALIDATION_ERROR`; missing CSRF returns `403`; direct-IP reset excess (20/hour default) returns `429 PASSWORD_RECOVERY_RATE_LIMITED`; unavailable Redis/storage returns `503 PASSWORD_RECOVERY_TEMPORARILY_UNAVAILABLE`. Malformed JSON returns `400 MALFORMED_JSON`. The password is NFC-normalized without trimming and encoded with the registration PBKDF2 encoder. Success atomically consumes the token, updates the hash, increments `auth_version`, and enqueues a `PASSWORD_CHANGED` notice. Every earlier authenticated session fails subsequent protected requests regardless of best-effort Redis cleanup. See [OpenAPI](api/openapi.yaml) and the [stage note](implementation/milestone-1d-c-password-reset.md).
+
+Stage 1D-D implements the browser clients for these existing contracts without changing HTTP fields or statuses. `/forgot-password` sends only the normalized email and displays generic `202` copy. `/reset-password` reads an opaque token from the Mailpit link fragment, removes the fragment from history, and sends `{ token, newPassword }` only after a valid, explicit submission. Both calls bootstrap a fresh session-bound CSRF token through `/auth/csrf`. The UI treats a definitive `PASSWORD_RESET_TOKEN_INVALID` as terminal, keeps network uncertainty distinct from confirmed success, and never automatically authenticates the user. See the [1D-D note](implementation/milestone-1d-d-angular-password-recovery.md).
 
 Example login response:
 

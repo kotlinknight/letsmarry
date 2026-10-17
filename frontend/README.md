@@ -1,6 +1,6 @@
 # Make My Marriage frontend
 
-This directory contains the Angular foundation from Milestones 0C and 0D, the Stage 1B-C email-verification confirmation page, and the Stage 1C-C authentication UI. It provides a strict standalone application, lazy routing, a responsive application shell, reviewed Figma design tokens, persistent Light/Dark themes, automated lint and browser checks, and a production-style container image. Wedding creation and dashboard business data are not implemented.
+This directory contains the Angular foundation from Milestones 0C and 0D, the Stage 1B-C email-verification confirmation page, the Stage 1C-C authentication UI, and the Stage 1D-D password-recovery pages. It provides a strict standalone application, lazy routing, a responsive application shell, reviewed Figma design tokens, persistent Light/Dark themes, automated lint and browser checks, and a production-style container image. Wedding creation and dashboard business data are not implemented.
 
 ## Requirements
 
@@ -31,6 +31,8 @@ Available foundation routes:
 - `/design-tokens` — reviewable color, semantic, spacing, and radius tokens
 - `/verify-email#token=<opaque-token>` — explicit email verification confirmation; the fragment is stripped immediately and never stored
 - `/login` — responsive email/password sign-in with CSRF bootstrap and generic errors
+- `/forgot-password` — generic reset-link request for an eligible account
+- `/reset-password#token=<opaque-token>` — explicit password reset; the fragment is immediately removed
 - `/account` — guarded temporary account page with current-user details and logout
 - `/` and unknown paths redirect to `/foundation`
 
@@ -48,7 +50,9 @@ The verification page requests a session-bound CSRF token before either POST. It
 
 Stage 1C-C uses same-origin HttpClient calls with browser cookies. Every unsafe authentication request fetches a fresh JSON CSRF token first; a rejected request is shown to the user and is never automatically replayed. Session state lives in an Angular service, not browser storage. Application startup and protected navigation call `/api/v1/users/me`; a `401` redirects protected navigation to sign-in and a service failure hides stale account details. A failed logout is checked with `/users/me` before the UI reports the session ended. See the [Stage 1C-C note](../docs/implementation/milestone-1c-c-angular-authentication.md).
 
-The DTOs in `src/app/core/api/auth-api.service.ts` are manually mirrored from `docs/api/openapi.yaml`. The locked toolchain has no OpenAPI generator yet; when one is adopted, generated types must be kept separate from handwritten services. Password recovery and registration UI are deferred. The verification link remains usable only where the gated backend endpoint is enabled.
+The DTOs in `src/app/core/api/auth-api.service.ts` and the recovery request shapes in `src/app/features/password-recovery/password-recovery-api.service.ts` are manually mirrored from `docs/api/openapi.yaml`. The locked toolchain has no OpenAPI generator yet; when one is adopted, generated types must be kept separate from handwritten services. Registration UI remains deferred. Verification and recovery links work only where their gated backend endpoints are enabled.
+
+Stage 1D-D uses the same-origin `/api` proxy and obtains a fresh anonymous-session CSRF token before either recovery POST. The forgot page gives the same accepted message for every valid account state. The reset page strips the token fragment on load and on same-route navigation, retains it only in component memory, requires explicit submission, and clears it after success or definitive invalidity. It does not sign the user in. The document uses a `no-referrer` policy. A confirmed reset clears the Angular account state immediately; existing `/users/me` restoration and protected-route checks reject older sessions, while uncertain logout still needs a server check. The backend recovery gate must be enabled separately in `local` or `test`, along with the outbox and mail worker for a delivered link. See the [1D-D implementation note](../docs/implementation/milestone-1d-d-angular-password-recovery.md).
 
 ## Checks
 
@@ -60,6 +64,6 @@ npm.cmd run format:check
 npm.cmd run test:e2e
 ```
 
-The Angular unit-test builder runs Vitest in jsdom. The normal Playwright suite exercises foundation navigation and authentication with controlled API fixtures, including protected-route restoration, logout, session expiry, and mobile Light/Dark behavior in Chromium. Stage 1C-D adds an opt-in real-service Chromium journey through registration, Mailpit verification, login, Redis session restoration, and logout. It runs only with `MMM_REAL_SERVICES=1` and isolated service-container environment variables; see the [1C-D integration note](../docs/implementation/milestone-1c-d-authentication-integration.md). The local web-server setting reuses a healthy application already listening on port 4200, so the same journeys can validate the container profile.
+The Angular unit-test builder runs Vitest in jsdom. The normal Playwright suite exercises foundation, authentication, and recovery with controlled API fixtures, including protected-route restoration, logout, session expiry, and mobile Light/Dark behavior in Chromium. Stage 1C-D adds an opt-in real-service Chromium authentication journey; 1D-D adds a separate full recovery journey through Mailpit and global session revocation. These run only with `MMM_REAL_SERVICES=1` and isolated service-container environment variables; see the [1C-D](../docs/implementation/milestone-1c-d-authentication-integration.md) and [1D-D](../docs/implementation/milestone-1d-d-angular-password-recovery.md) notes. The local web-server setting reuses a healthy application already listening on port 4200, so the same journeys can validate the container profile.
 
 The [Dockerfile](Dockerfile) builds the locked production bundle and serves it from NGINX as the unprivileged `nginx` user. NGINX provides SPA fallback routing, security headers, correct static-asset types, and an `/api` reverse proxy to the backend container. Angular critical-style inlining is disabled for production so the strict Content Security Policy can reject inline scripts and styles.

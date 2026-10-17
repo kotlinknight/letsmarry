@@ -39,7 +39,10 @@ class SecurityConfiguration {
                         HttpMethod.POST,
                         "/api/v1/auth/register",
                         "/api/v1/auth/email/verify",
-                        "/api/v1/auth/email/verification-requests")
+                        "/api/v1/auth/email/verification-requests",
+                        "/api/v1/auth/password/forgot")
+                    .permitAll()
+                    .requestMatchers(HttpMethod.POST, "/api/v1/auth/password/reset")
                     .permitAll()
                     .anyRequest()
                     .authenticated())

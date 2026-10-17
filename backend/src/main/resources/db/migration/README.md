@@ -9,12 +9,14 @@ tokens in Milestone 1B-A without changing existing users or V1.
 queue in Stage 1B-B without changing V1 or V2.
 `V4__link_outbox_purpose.sql` adds an optional purpose ID and pending-job index
 so replacement tokens can cancel and purge obsolete jobs without a module FK.
+`V5__create_password_reset_tokens.sql` adds a separate hash-only reset-token
+table and a non-null `users.auth_version` defaulting existing accounts to zero.
+The version is stored but not yet enforced against sessions in Stage 1D-A.
 
 Add immutable `V<number>__description.sql` files in implementation order. Never
 edit a migration that has been shared. Hibernate validates the schema and must
 not generate it. Automatic baselining and Flyway clean are disabled.
 
 The integration tests check startup and Hibernate validation on fresh PostgreSQL
-instances, with Flyway history, `users`, `email_verification_tokens`, and
-`email_outbox` present.
+instances, with Flyway history and the implemented identity/outbox tables present.
 Future schema changes must append migrations and preserve existing data.

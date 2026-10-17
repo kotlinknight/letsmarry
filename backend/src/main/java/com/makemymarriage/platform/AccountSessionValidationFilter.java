@@ -34,6 +34,8 @@ final class AccountSessionValidationFilter extends OncePerRequestFilter {
         || path.equals("/api/v1/auth/register")
         || path.equals("/api/v1/auth/email/verify")
         || path.equals("/api/v1/auth/email/verification-requests")
+        || path.equals("/api/v1/auth/password/forgot")
+        || path.equals("/api/v1/auth/password/reset")
         || path.equals("/actuator/health")
         || path.startsWith("/actuator/health/");
   }
@@ -48,7 +50,10 @@ final class AccountSessionValidationFilter extends OncePerRequestFilter {
         principal instanceof PlannerPrincipal planner
             ? validator.findEligibleAccount(planner.id()).orElse(null)
             : null;
-    if (account == null) {
+    if (account == null
+        || !(principal instanceof PlannerPrincipal planner)
+        || planner.authVersion() == null
+        || planner.authVersion().longValue() != account.authVersion()) {
       HttpSession session = request.getSession(false);
       if (session != null) session.invalidate();
       SecurityContextHolder.clearContext();

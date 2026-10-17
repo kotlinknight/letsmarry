@@ -30,18 +30,31 @@ function sql(query: string): string {
   );
 }
 
-function sessionExists(id: string): boolean {
+function sessionRedisState(id: string) {
   // Spring Session's cookie serializer Base64-encodes the Redis session ID.
   const redisId = Buffer.from(id, 'base64').toString('utf8');
   if (!/^[0-9a-f-]{36}$/.test(redisId)) throw new Error('Unexpected session cookie format.');
-  return (
-    containerCommand(
-      redis!,
-      'redis-cli',
-      'EXISTS',
-      `makemymarriage:session:sessions:${redisId}`,
-    ) === '1'
-  );
+  const key = `makemymarriage:session:sessions:${redisId}`;
+  const command = (...args: string[]) => containerCommand(redis!, 'redis-cli', ...args);
+  const interval = spawnSync('docker', [
+    'exec',
+    redis!,
+    'redis-cli',
+    '--raw',
+    'HGET',
+    key,
+    'maxInactiveInterval',
+  ]);
+  if (interval.status !== 0 || interval.stdout.subarray(0, 4).toString('hex') !== 'aced0005') {
+    throw new Error('Could not inspect the isolated Spring Session interval.');
+  }
+  return {
+    type: command('TYPE', key),
+    intervalSeconds: interval.stdout.readInt32BE(interval.stdout.length - 5),
+    ttlSeconds: Number(command('TTL', key)),
+    shadowExists: command('EXISTS', `makemymarriage:session:sessions:expires:${redisId}`) === '1',
+    securityContextStored: command('HEXISTS', key, 'sessionAttr:SPRING_SECURITY_CONTEXT') === '1',
+  };
 }
 
 test('real registration, Mailpit verification, login, restoration, and logout', async ({
@@ -176,8 +189,22 @@ test('real registration, Mailpit verification, login, restoration, and logout', 
   const authenticatedCookie = (await context.cookies()).find((cookie) => cookie.name === 'SESSION');
   expect(authenticatedCookie?.httpOnly).toBe(true);
   expect(authenticatedCookie?.value).not.toBe(anonymousCookie?.value);
-  expect(sessionExists(authenticatedCookie!.value)).toBe(true);
-  expect(sessionExists(anonymousCookie!.value)).toBe(false);
+  const activeSession = sessionRedisState(authenticatedCookie!.value);
+  expect(activeSession.type).toBe('hash');
+  expect(activeSession.intervalSeconds).toBe(1800);
+  expect(activeSession.shadowExists).toBe(true);
+  expect(activeSession.securityContextStored).toBe(true);
+  const principalIndex = `makemymarriage:session:index:org.springframework.session.FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME:${id}`;
+  expect(containerCommand(redis!, 'redis-cli', 'SCARD', principalIndex)).toBe('1');
+  // Session fixation protection removes the pre-login anonymous session.
+  expect(
+    containerCommand(
+      redis!,
+      'redis-cli',
+      'EXISTS',
+      `makemymarriage:session:sessions:${Buffer.from(anonymousCookie!.value, 'base64').toString('utf8')}`,
+    ),
+  ).toBe('0');
   const me = await page.request.get('/api/v1/users/me');
   expect(me.status()).toBe(200);
   expect(await me.json()).toMatchObject({ id, email, emailVerified: true, status: 'ACTIVE' });
@@ -187,7 +214,17 @@ test('real registration, Mailpit verification, login, restoration, and logout', 
   await expect(page.getByText(email)).toBeVisible();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login$/);
-  expect(sessionExists(authenticatedCookie!.value)).toBe(false);
+  const expiredSession = sessionRedisState(authenticatedCookie!.value);
+  // RedisIndexedSessionRepository retains a short-lived hash for destruction events.
+  // It is expired server-side even while the hash (including serialized attributes) exists.
+  expect(expiredSession.type).toBe('hash');
+  expect(expiredSession.intervalSeconds).toBe(0);
+  expect(expiredSession.ttlSeconds).toBeGreaterThan(0);
+  expect(expiredSession.ttlSeconds).toBeLessThanOrEqual(300);
+  expect(expiredSession.shadowExists).toBe(false);
+  expect(expiredSession.securityContextStored).toBe(true);
+  expect(containerCommand(redis!, 'redis-cli', 'SCARD', principalIndex)).toBe('0');
+  expect((await context.cookies()).find((cookie) => cookie.name === 'SESSION')).toBeUndefined();
   const oldSession = await request.get('http://127.0.0.1:8080/api/v1/users/me', {
     headers: { Cookie: `SESSION=${authenticatedCookie!.value}` },
   });

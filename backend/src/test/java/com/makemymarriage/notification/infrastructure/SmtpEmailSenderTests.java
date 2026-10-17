@@ -17,6 +17,7 @@ import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.mail.MailSendException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
@@ -55,6 +56,35 @@ class SmtpEmailSenderTests {
     assertThatThrownBy(() -> new SmtpEmailSender(mail, new ObjectMapper(), "", "", 0))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageNotContaining("private-token");
+  }
+
+  @Test
+  void resetMailUsesItsOwnSubjectAndRejectsMalformedLink() throws Exception {
+    JavaMailSender mail = mock(JavaMailSender.class);
+    when(mail.createMimeMessage())
+        .thenReturn(new MimeMessage(Session.getInstance(new Properties())));
+    String url = "http://127.0.0.1:4200/reset-password#token=" + "A".repeat(43);
+    sender(mail)
+        .send(
+            new EmailDelivery(
+                UUID.randomUUID(),
+                "a@example.com",
+                "PASSWORD_RESET",
+                "{\"resetUrl\":\"" + url + "\"}"));
+    var message = ArgumentCaptor.forClass(MimeMessage.class);
+    verify(mail).send(message.capture());
+    assertThat(message.getValue().getSubject()).isEqualTo("Reset your Make My Marriage password");
+    assertThatThrownBy(
+            () ->
+                sender(mail)
+                    .send(
+                        new EmailDelivery(
+                            UUID.randomUUID(),
+                            "a@example.com",
+                            "PASSWORD_RESET",
+                            "{\"resetUrl\":\"https://example.com/reset#token=bad\"}")))
+        .isInstanceOfSatisfying(
+            EmailSendException.class, exception -> assertThat(exception.isPermanent()).isTrue());
   }
 
   @Test

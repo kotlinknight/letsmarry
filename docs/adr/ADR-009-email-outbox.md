@@ -33,4 +33,8 @@ Stage 1B-C ends the temporary user-only registration exception for new local/tes
 
 Stage 1B-D adds a Spring Boot managed SMTP adapter for local Mailpit only. The worker remains opt-in and local/test-only. Identity implements a public delivery-eligibility port so the notification worker can reject an expired, revoked, consumed, or ineligible token immediately before SMTP without importing identity persistence. Once SMTP begins, revocation cannot guarantee recall; the verification API still rejects the old link. Redis rate limits are transient abuse controls, never a second durable email queue.
 
+Stage 1D-B reuses this same outbox for `PASSWORD_RESET`. Identity atomically replaces the hash-only reset token and enqueues an AES-GCM-protected link, canceling and purging an older pending job by purpose ID. The worker checks reset-token and account eligibility through the identity-owned port before sending. It retains the existing lease, retry, terminal purge, and possible in-flight delivery behavior. No reset-specific queue or schema migration is introduced.
+
+Stage 1D-C adds `PASSWORD_CHANGED` to that same pipeline. The reset transaction enqueues an encrypted, token-free notice and cancels its pending reset-link job together with token consumption, password-hash update, and auth-version increment. A failed enqueue rolls back the reset; SMTP still runs outside the transaction with the existing claim, retry, lease, and terminal-purge rules. Identity permits delivery while the referenced user still exists. An already-processing reset email may arrive, but its consumed token cannot change the password again.
+
 See [architecture](../02-system-architecture.md) and [database design](../03-database-design.md).

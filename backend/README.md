@@ -1,6 +1,6 @@
 # Backend
 
-This is the Spring Boot modular monolith. Stage 1C-B adds current-user retrieval, server-side logout, and account revalidation to the opt-in Redis-session login. Angular authentication and wedding features are not implemented yet.
+This is the Spring Boot modular monolith. Milestone 1C provides Redis-session login, current-user retrieval, logout, and the Angular authentication UI. Stage 1D-C adds local/test-only password reset, password-changed email, and global session revocation. Angular recovery UI and wedding features are not implemented yet.
 
 ## Toolchain and dependencies
 
@@ -8,7 +8,7 @@ Use Java 25 and the included Gradle 9.8.1 Wrapper. Spring Boot 4.1.1 manages Spr
 
 The build uses Boot 4's focused Web MVC, Redis Session, Flyway, Validation, and Mail starters. No separate dependency-management plugin is needed: Gradle imports the BOMs directly. Production provider SDKs, client generation, and persistent event publication remain deferred. Spotless 8.10.4 with Google Java Format 1.36.1 enforces the Java source format.
 
-There is one Gradle project with base package `com.makemymarriage`. `identity` owns accounts and verification tokens; `notification` owns the encrypted outbox and delivery worker; `platform` holds shared security and correlation-ID support. Add other modules with their first features.
+There is one Gradle project with base package `com.makemymarriage`. `identity` owns accounts and separate verification/reset tokens; `notification` owns the encrypted outbox and delivery worker; `platform` holds shared security and correlation-ID support. Add other modules with their first features.
 
 Future module rules:
 
@@ -18,7 +18,7 @@ Future module rules:
 - `audit` owns sensitive action history.
 - Modules expose small public contracts and keep repositories internal.
 
-Flyway applies the [users migration](src/main/resources/db/migration/V1__create_users.sql), [verification-token migration](src/main/resources/db/migration/V2__create_email_verification_tokens.sql), and [outbox migration](src/main/resources/db/migration/V3__create_email_outbox.sql), then validates its history. Hibernate uses `ddl-auto=validate`, with Open Session in View disabled. Never edit a shared migration or use Hibernate schema generation.
+Flyway applies immutable V1–V4 migrations and the [V5 password-reset foundation](src/main/resources/db/migration/V5__create_password_reset_tokens.sql), then validates its history. V5 adds a separate hash-only token table and `users.auth_version=0` for existing accounts. Stage 1D-C now increments that version on reset and checks it on protected requests; no additional migration was needed. Hibernate uses `ddl-auto=validate`, with Open Session in View disabled. Never edit a shared migration or use Hibernate schema generation.
 
 The entry point sets the backend JVM's default timezone to UTC before Spring starts. This makes JDBC startup and server timestamps independent of the host timezone, including the Windows `Asia/Calcutta` alias that the selected PostgreSQL image rejects. It does not change the host timezone or future wedding-specific IANA timezone fields. Integration tests launch through this same entry point and verify the database connection timezone.
 
@@ -42,6 +42,10 @@ $env:MAIL_FROM = 'hello@makemymarriage.local'
 $env:EMAIL_OUTBOX_WORKER_ENABLED = 'true'
 $env:AUTHENTICATION_ENABLED = 'true'
 $env:AUTHENTICATION_RATE_LIMIT_KEY = '<base64-of-a-third-private-random-32-byte-key>'
+# Optional Stage 1D-B forgot-password requests:
+# $env:PASSWORD_RECOVERY_ENABLED = 'true'
+# $env:PASSWORD_RECOVERY_RATE_LIMIT_KEY = '<base64-of-a-fourth-private-random-32-byte-key>'
+# $env:PASSWORD_RECOVERY_RESET_IP_HOURLY = '20'
 Set-Location backend
 .\gradlew.bat bootRun
 ```
@@ -55,6 +59,37 @@ These are development examples. Match the database name, username, password, and
 `app.registration.enabled` and `app.email-outbox.enabled` are false in the base profile. The registration controller requires both flags and a `local` or `test` profile; `production` blocks it even if also activated. The `local` profile enables the flags and Redis rate limiting, so private outbox and rate-limit keys are required at startup. Registration, verification, and resend return `404` when gated off; `GET /api/v1/auth/csrf` remains available independently. The scheduled worker additionally requires explicit `EMAIL_OUTBOX_WORKER_ENABLED=true`.
 
 Login requires separate `AUTHENTICATION_ENABLED=true` and a private `AUTHENTICATION_RATE_LIMIT_KEY` (Base64 of at least 32 random bytes). The flag is false by default, including local development, and has no profile restriction. A future approved production deployment may enable login while public registration remains disabled. Do not reuse the outbox encryption or verification rate-limit keys. A missing or weak authentication rate-limit key fails startup when login is enabled. The initial configurable limits are 10 attempts per normalized email and 60 per direct IP per 15 minutes.
+
+Forgot-password requests require separate `PASSWORD_RECOVERY_ENABLED=true`, the existing enabled encrypted outbox, and a private `PASSWORD_RECOVERY_RATE_LIMIT_KEY` (Base64 of at least 32 random bytes, distinct from all other keys). The endpoint exists only in `local` or `test`, even if production is accidentally combined with local. It is independent of registration and login flags. The worker still needs `EMAIL_OUTBOX_WORKER_ENABLED=true` plus Mailpit SMTP settings to deliver mail. Initial limits are one request per normalized email every five minutes, three per email per rolling day, and 30 per direct IP per hour. Email-specific limits return the same empty `202`; IP-wide excess returns `429`, and Redis failure returns `503` before token work. The response has a configurable 250 ms floor to reduce obvious timing differences. `PASSWORD_RECOVERY_FRONTEND_URL` defaults to `http://127.0.0.1:4200/reset-password`; Stage 1D-D provides that Angular page. Start the Angular dev server at this address to use the Mailpit link.
+
+The reset endpoint uses the same local/test recovery and outbox gates independently of registration and login. It limits reset attempts to 20 per direct IP per hour by default (`PASSWORD_RECOVERY_RESET_IP_HOURLY`) and fails closed if Redis is unavailable. A successful reset returns `204`, does not log the user in, and makes every earlier authenticated session unusable through PostgreSQL `auth_version` comparison. Spring Session's indexed Redis repository also deletes newly indexed sessions after commit when available; older unindexed sessions are rejected on their next protected request. The 30-minute inactivity timeout remains unchanged. Mailpit receives a separate `PASSWORD_CHANGED` notice without credentials or a reset link. The Angular reset page is available in Stage 1D-D; the API can also be exercised directly using the Mailpit link's fragment token.
+
+With the same anonymous CSRF session, request a reset email:
+
+```powershell
+$csrfResponse = Invoke-WebRequest http://127.0.0.1:8080/api/v1/auth/csrf -SessionVariable recoverySession
+$csrf = $csrfResponse.Content | ConvertFrom-Json
+$recoveryHeaders = @{}
+$recoveryHeaders[$csrf.headerName] = $csrf.token
+Invoke-WebRequest http://127.0.0.1:8080/api/v1/auth/password/forgot -Method Post -WebSession $recoverySession -Headers $recoveryHeaders -ContentType 'application/json' -Body '{"email":"anjali@example.com"}'
+```
+
+An eligible verified `ACTIVE` account receives a 30-minute link through the encrypted PostgreSQL outbox. Unknown or ineligible accounts get the same `202` without a mail job. A new allowed request revokes the previous token and purges its pending mail where possible; a processing email can still arrive with an invalid link. No password, account standing, or authenticated session changes in 1D-B. See the [stage note](../docs/implementation/milestone-1d-b-forgot-password.md).
+
+For Stage 1D-C, copy the token from the Mailpit reset link's `#token=` fragment. Start a fresh anonymous session with `/api/v1/auth/csrf`, then submit it to `/api/v1/auth/password/reset` with `newPassword`. The password must contain 15–128 Unicode code points after NFC normalization and cannot contain control characters. The token is single-use and expires after 30 minutes. The API does not authenticate the new browser; log in separately with the new password. Avoid saving the token in shell history or logs. See the [OpenAPI contract](../docs/api/openapi.yaml) and [stage note](../docs/implementation/milestone-1d-c-password-reset.md).
+
+```powershell
+$resetToken = Read-Host 'Paste the token from the Mailpit link fragment'
+$newPassword = Read-Host 'New password' -AsSecureString
+$passwordText = [System.Net.NetworkCredential]::new('', $newPassword).Password
+$csrfResponse = Invoke-WebRequest http://127.0.0.1:8080/api/v1/auth/csrf -SessionVariable resetSession
+$csrf = $csrfResponse.Content | ConvertFrom-Json
+$resetHeaders = @{}
+$resetHeaders[$csrf.headerName] = $csrf.token
+$resetBody = @{ token = $resetToken; newPassword = $passwordText } | ConvertTo-Json
+Invoke-WebRequest http://127.0.0.1:8080/api/v1/auth/password/reset -Method Post -WebSession $resetSession -Headers $resetHeaders -ContentType 'application/json' -Body $resetBody
+Remove-Variable passwordText, resetBody, resetToken
+```
 
 With the local backend running, use the same web session for CSRF bootstrap and registration:
 
@@ -110,7 +145,7 @@ Invoke-RestMethod http://127.0.0.1:8080/api/v1/auth/logout -Method Post -WebSess
 - `GET /actuator/health`, `/actuator/health/liveness`, and `/actuator/health/readiness` are public. Responses hide dependency details; readiness includes PostgreSQL and Redis, while liveness checks application state.
 - Other requests require authentication. Anonymous reads return `401`, without redirecting to a login screen. Writes without a valid CSRF token return `403`.
 - Basic authentication, generated users, login/logout pages, and saved-request redirects are disabled. The JSON login endpoint is available only with its separate opt-in flag; `/users/me` and server-side logout are implemented.
-- Spring Session persists sessions in Redis under `makemymarriage:session`. Cookies are HttpOnly and SameSite=Lax; URL-based session tracking is disabled. The configurable 30-minute timeout is a foundation default, not the final account policy.
+- Spring Session persists sessions in Redis under `makemymarriage:session` using its indexed repository. Cookies are HttpOnly and SameSite=Lax; URL-based session tracking is disabled. The configurable 30-minute timeout remains in force. Protected requests compare the principal's captured `auth_version` with PostgreSQL; legacy principals without one must log in again.
 - Default Spring Security session-based CSRF protection remains enabled. The local/test Angular verification page uses `SESSION` and `X-CSRF-TOKEN`; login and logout clear old CSRF state, so the client must call `/auth/csrf` again before another write.
 
 Once the backend starts, open [health](http://127.0.0.1:8080/actuator/health) or run:
@@ -153,6 +188,6 @@ Stop a running packaged application before rebuilding its JAR; replacing a JAR u
 
 For deliberate dependency updates, review compatibility first, regenerate locks with `./gradlew.bat build --write-locks`, review the lockfile diff, then run the normal locked build. Do not update versions just to bypass a failing test.
 
-Angular authentication, password recovery, and wedding creation remain outside Stage 1C-B. Duplicate-registration `409` responses need an account-enumeration review before public signup.
+Angular recovery pages and wedding creation remain outside Stage 1D-C. Duplicate-registration `409` responses need an account-enumeration review before public signup. See the [1D-A](../docs/implementation/milestone-1d-a-password-reset-tokens.md), [1D-B](../docs/implementation/milestone-1d-b-forgot-password.md), and [1D-C](../docs/implementation/milestone-1d-c-password-reset.md) implementation notes.
 
 See the [development plan](../docs/05-development-plan.md) and [architecture](../docs/02-system-architecture.md).

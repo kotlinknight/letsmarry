@@ -2,7 +2,7 @@
 
 **Status:** MVP logical schema design  
 **Version:** 1.0  
-**Last updated:** 2026-10-13
+**Last updated:** 2026-10-16
 
 **Database:** PostgreSQL  
 **Migrations:** Flyway  
@@ -94,6 +94,7 @@ version     BIGINT NOT NULL DEFAULT 0
 | `phone` | VARCHAR(30) NULL | Optional |
 | `status` | VARCHAR(30) NOT NULL | `ACTIVE`, `SUSPENDED`, `DEACTIVATED` |
 | `email_verified_at` | TIMESTAMPTZ NULL | Account verification |
+| `auth_version` | BIGINT NOT NULL DEFAULT 0 | Durable session-revocation generation; incremented by password reset and checked on protected requests since 1D-C |
 | `created_at`, `updated_at`, `version` | Standard | User account metadata |
 
 ```sql
@@ -114,9 +115,23 @@ CREATE UNIQUE INDEX ux_users_email_ci ON users (lower(email));
 
 An active token has both terminal timestamps null; a partial unique index permits at most one such row per user. Expiry is evaluated at use time, not by the index: issuing a replacement first revokes any previous active row, including an expired one. An expiry index supports later cleanup. Successful use consumes the token and sets `users.email_verified_at` in one transaction, leaving account `status` unchanged. Sensitive delivery material belongs only in the future encrypted outbox and is not stored in this table.
 
-### `password_reset_tokens` (planned)
+### `password_reset_tokens`
 
-This later feature will need a separate hash-only token table and its own lifecycle rules; do not infer that it already exists from the verification-token migration.
+**Implemented internally in Stage 1D-A:** [`V5__create_password_reset_tokens.sql`](../backend/src/main/resources/db/migration/V5__create_password_reset_tokens.sql). The table is separate from verification tokens. Stage 1D-B uses it for forgot-password email requests, and Stage 1D-C consumes tokens for password changes.
+
+| Column | PostgreSQL type | Constraint or purpose |
+|---|---|---|
+| `id` | UUID PK | Application-generated UUIDv7 |
+| `user_id` | UUID NOT NULL | Restrictive FK to `users(id)` |
+| `token_hash` | BYTEA NOT NULL | SHA-256 of 32 random bytes; exactly 32 bytes and unique |
+| `expires_at`, `created_at` | TIMESTAMPTZ NOT NULL | 30-minute expiry at issue; creation defaults to `now()` |
+| `consumed_at`, `revoked_at` | TIMESTAMPTZ NULL | Mutually exclusive terminal states |
+
+The partial unique index allows at most one unconsumed, unrevoked reset token per user. Expiry is checked at use time, not in the index: replacement revokes an older active row even if it has expired. The application locks the user before the token row for issue, revoke, and consume operations. Consumption joins the password-hash update, `auth_version` increment, and outbox enqueue in one transaction. V5 gave all existing users `auth_version=0` without altering their hash, status, verification, or existing tokens/outbox rows. Stage 1D-C now enforces the version on protected requests; no new migration was required.
+
+Stage 1D-B adds no migration. The existing `email_outbox` stores `PASSWORD_RESET` jobs with `purpose_id` set to the reset-token ID. The URL exists only inside AES-GCM ciphertext until the worker decrypts it for SMTP; terminal jobs purge that ciphertext. Issuance, previous-token revocation, pending-job cancellation, and replacement enqueue share one PostgreSQL transaction. A processing job cannot be recalled, but its revoked purpose is rejected where possible and its link remains unusable.
+
+Stage 1D-C adds no migration. A successful reset marks the token consumed, updates `users.password_hash`, increments `users.auth_version`, cancels any pending reset-email job, and inserts `PASSWORD_CHANGED` in the same transaction. The notice uses the user UUID as its `purpose_id` and an empty encrypted JSON payload; it contains no password, hash, or token. A database or encryption failure rolls back the entire reset. Indexed Redis session deletion runs after commit and cannot reverse the durable version change.
 
 ### Planner sessions
 
@@ -435,9 +450,10 @@ V1__create_users.sql               # implemented in Milestone 1A
 V2__create_email_verification_tokens.sql # implemented in Milestone 1B-A
 V3__create_email_outbox.sql         # implemented in Milestone 1B-B
 V4__link_outbox_purpose.sql          # implemented in Milestone 1B-C
+V5__create_password_reset_tokens.sql # implemented in Stage 1D-A
 ```
 
-Only V1 through V4 exist. Future wedding, membership, event, guest, finance, website, and audit migrations receive numbers when their features are implemented. Introduce any optional wedding association only when its referenced table exists. Audit tables likewise arrive with the first audited feature. Once migrations are shared, append new versions rather than renumbering or editing them.
+Only V1 through V5 exist. Future wedding, membership, event, guest, finance, website, and audit migrations receive numbers when their features are implemented. Introduce any optional wedding association only when its referenced table exists. Audit tables likewise arrive with the first audited feature. Once migrations are shared, append new versions rather than renumbering or editing them.
 
 Example application config:
 

@@ -1,8 +1,8 @@
 # Make My Marriage — Development Plan
 
-**Status:** Milestone 0 and 1A complete; Stages 1B-A/B/C implemented locally, uncommitted and pending review
+**Status:** Milestones 0, 1A, 1B, and 1C have local checkpoints; Stages 1D-A/B/C are implemented locally and uncommitted
 
-**Last updated:** 2026-10-13
+**Last updated:** 2026-10-16
 
 ## 1. Delivery boundaries
 
@@ -245,3 +245,23 @@ Stage 1C-C adds `/login` and a guarded temporary `/account` page to the existing
 ## 19. Stage 1C-D authentication integration record
 
 The opt-in [real-service browser journey](implementation/milestone-1c-d-authentication-integration.md) now exercises registration through Mailpit verification, Angular login, Redis session restoration, and logout against an isolated PostgreSQL/Redis/Mailpit Compose project. It verifies database token/outbox state, browser cookies, Redis session keys, and old-session rejection. The run exposed and corrected the Spring Boot 4.1 Redis namespace property path; a foundation integration assertion guards it. Full backend and frontend suites passed. The local/test-only registration gate, default-off authentication gate, and production rollout review remain in force. No migration, dependency, business feature, commit, or push was added in this stage.
+
+## 20. Stage 1D-A password-reset token foundation
+
+After a scope and credential-file review, completed 1C changes were saved in local checkpoint `6c92a74` with explicit user authorization. Stage 1D-A adds additive V5 schema for hash-only `password_reset_tokens` and nonnegative `users.auth_version` defaulting to zero for retained accounts. The identity module supplies 30-minute random token issuance, replacement, revocation, and single-use consumption under a consistent user-row-first lock order. Consumption requires an outer transaction so a later reset command can atomically update the password hash, consume the token, and advance the durable session version. See [ADR-015](adr/ADR-015-password-recovery-tokens.md) and the [implementation note](implementation/milestone-1d-a-password-reset-tokens.md).
+
+Stage 1D-A adds no recovery endpoint, email template, password mutation, Redis repository change, session-version enforcement, Angular page, or registration UI. Existing sessions continue under 1C rules until 1D-C adds version capture and validation; legacy versionless sessions must reauthenticate at that transition. The registration gate remains independent of future recovery configuration. Stage 1D-A changes remain uncommitted and unpushed.
+
+Verification: the locked offline Gradle build, Spotless, and all 92 tests passed after Docker Desktop became available. PostgreSQL Testcontainers proved the fresh V5 schema, Hibernate validation, preserved V4 data on upgrade, database constraints, and concurrent token behavior. Spring Modulith and existing security regression tests passed. No developer database was reset or modified.
+
+## 21. Stage 1D-B forgot-password request and delivery
+
+The independently enabled local/test forgot endpoint accepts a normalized email, requires the anonymous Redis session and CSRF header, and gives a generic empty `202` for all valid account states. A verified `ACTIVE` account gets a reset token and encrypted `PASSWORD_RESET` outbox job in one transaction. Replacement revokes the old token and cancels/purges its pending job; the existing worker checks eligibility and sends a 30-minute fragment link through Mailpit. HMAC-keyed Redis limits and a response-duration floor protect against simple enumeration. No new migration, queue, password change, session revocation, or Angular recovery screen is part of 1D-B. See the [implementation note](implementation/milestone-1d-b-forgot-password.md) for configuration and verification.
+
+## 22. Stage 1D-C password reset and session revocation
+
+The gated reset API consumes a single-use token and atomically updates the normalized PBKDF2 password hash, increments `users.auth_version`, cancels pending reset-link mail, and enqueues a token-free `PASSWORD_CHANGED` notice in the existing encrypted PostgreSQL outbox. Login captures the database version in a UUID-named principal. Every protected request rereads PostgreSQL and rejects an old or versionless principal. Spring Session's indexed Redis repository supports best-effort post-commit deletion for newly indexed sessions; the database version remains authoritative if deletion fails or a legacy session has no index. The 30-minute inactivity timeout, current-session logout, registration gate, and existing account-status checks remain. See the [implementation note](implementation/milestone-1d-c-password-reset.md) for verification. Angular recovery pages and public rollout remain later stages.
+
+## 23. Stage 1D-D Angular password recovery and integration
+
+The approved frontend stage adds standalone `/forgot-password` and `/reset-password` routes, a login-page link, shared Figma semantic styling, reactive validation, safe status messages, and same-origin CSRF-protected calls to the existing recovery APIs. Reset links are fragment-based and are scrubbed on initial load and subsequent same-route navigation; secrets remain in memory only. Successful reset clears the cached Angular account without logging the user in. The existing `/users/me` guard and account refresh enforce revocation in the UI. Controlled Chromium fixtures and an opt-in isolated real-service journey cover the frontend and backend together. See the [implementation note](implementation/milestone-1d-d-angular-password-recovery.md). Angular registration, public signup, production email, and wedding features remain deferred to separately approved work.
