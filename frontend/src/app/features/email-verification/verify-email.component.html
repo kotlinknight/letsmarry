@@ -10,6 +10,7 @@
       <button type="button" disabled>Verifying…</button>
     } @else if (state() === 'success') {
       <p role="status">Your email address is verified.</p>
+      <p><a routerLink="/login">Go to sign in</a></p>
     } @else if (state() === 'invalid') {
       <p role="alert">
         This link is invalid, expired, or has already been used. Request a fresh link below.

@@ -1,6 +1,6 @@
 # Backend
 
-This is the Spring Boot modular monolith. Milestone 1C provides Redis-session login, current-user retrieval, logout, and the Angular authentication UI. Stage 1D-C adds local/test-only password reset, password-changed email, and global session revocation. Angular recovery UI and wedding features are not implemented yet.
+This is the Spring Boot modular monolith. Milestone 1 implements the local/test account lifecycle: registration, email verification, Redis-session login/logout and current-user retrieval, password recovery, password-changed notification, and global old-session revocation. The Angular clients and a real-service browser journey cover that lifecycle. Public signup, production email delivery, and wedding features are not implemented.
 
 ## Toolchain and dependencies
 
@@ -160,7 +160,7 @@ An `UP` readiness response verifies application connectivity to PostgreSQL and R
 
 The base profile disables both `app.email-outbox.enabled` and `app.email-outbox.worker.enabled`; the local profile enables only the outbox. Enabling it requires `EMAIL_OUTBOX_ACTIVE_KEY_ID` and `EMAIL_OUTBOX_KEYS` in the backend process environment. `EMAIL_OUTBOX_KEYS` is a comma-separated list such as `v1:<Base64-encoded 32-byte key>`; keep older key IDs present until their pending messages are delivered or expired. Generate a stable key outside Git, provide it through the IDE or shell on each run, and never print or commit its value. The root `.env.example` documents variable names only; Compose's `--env-file` does not export them to a host-run backend.
 
-Stage 1B-D supplies a Spring Boot managed SMTP sender. The scheduled worker remains disabled by default, is local/test-only, and fails startup if its sender or required SMTP settings are absent. `SPRING_MAIL_HOST=127.0.0.1` and `SPRING_MAIL_PORT=1025` work for a host-run backend; an application container uses `mailpit:1025`. Do not set `SPRING_MAIL_HOST` when no SMTP service is configured, because Boot's mail health check would then affect readiness. The configured SMTP connection/read/write timeouts are 5/10/10 seconds, below the two-minute worker lease. Keep both private keys stable across restarts while pending jobs exist. See the [Stage 1B-D note](../docs/implementation/milestone-1b-d-mailpit-integration.md).
+Stage 1B-D supplies a Spring Boot managed SMTP sender. The scheduled worker remains disabled by default, is local/test-only, and fails startup if its sender or required SMTP settings are absent. `SPRING_MAIL_HOST=127.0.0.1` and `SPRING_MAIL_PORT=1025` work for a host-run backend; an application container uses `mailpit:1025`. Set `MAIL_FROM` to the sender address whenever the worker is enabled; `hello@makemymarriage.local` is a local-development value, not a production identity. Do not set `SPRING_MAIL_HOST` when no SMTP service is configured, because Boot's mail health check would then affect readiness. The configured SMTP connection/read/write timeouts are 5/10/10 seconds, below the two-minute worker lease. Keep the AES and HMAC keys private and stable across restarts while pending jobs exist, and retain older AES key IDs until their pending messages are delivered or expired. See the [Stage 1B-D note](../docs/implementation/milestone-1b-d-mailpit-integration.md).
 
 ## Stage 1B-C behavior
 
@@ -188,6 +188,6 @@ Stop a running packaged application before rebuilding its JAR; replacing a JAR u
 
 For deliberate dependency updates, review compatibility first, regenerate locks with `./gradlew.bat build --write-locks`, review the lockfile diff, then run the normal locked build. Do not update versions just to bypass a failing test.
 
-Angular recovery pages and wedding creation remain outside Stage 1D-C. Duplicate-registration `409` responses need an account-enumeration review before public signup. See the [1D-A](../docs/implementation/milestone-1d-a-password-reset-tokens.md), [1D-B](../docs/implementation/milestone-1d-b-forgot-password.md), and [1D-C](../docs/implementation/milestone-1d-c-password-reset.md) implementation notes.
+The Angular registration and recovery pages and the complete real-service account journey are implemented for local/test use. Duplicate-registration `409` responses still need an account-enumeration decision before public signup; production SMTP/provider, secret management, trusted proxy/origin, HTTPS, observability, and recovery procedures remain release work. Wedding creation is not implemented. See the [Milestone 1 final acceptance record](../docs/implementation/milestone-1-final-acceptance.md) and the detailed implementation notes under `docs/implementation`.
 
 See the [development plan](../docs/05-development-plan.md) and [architecture](../docs/02-system-architecture.md).

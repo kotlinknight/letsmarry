@@ -705,8 +705,8 @@ Stage 1C-C consumes the four implemented authentication endpoints from Angular: 
 
 ## 24. Testing checklist
 
-- [ ] Register, verify, login, restore identity through `/users/me`, logout and reset password.
-- [ ] CSRF protection/renewal, session expiry/revocation, and cookie configuration work correctly.
+- [x] Register, verify, login, restore identity through `/users/me`, logout and reset password (local/test acceptance; production rollout remains gated).
+- [x] CSRF protection/renewal, session restoration/revocation, and local/test cookie configuration work correctly (deployed HTTPS/proxy/origin configuration remains a release gate).
 - [ ] Bride creates wedding → BRIDE owner, groom accepts invite → GROOM owner.
 - [ ] Family creates wedding → setup ADMIN, both partners independently become OWNER.
 - [ ] Family member without finance permission → `403` on expense read.

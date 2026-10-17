@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, OnInit, signal } from '@angular/core';
 import { FormControl, ReactiveFormsModule, Validators } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { VerificationApiService } from './verification-api.service';
 
@@ -8,7 +9,7 @@ type VerificationState = 'ready' | 'missing' | 'submitting' | 'success' | 'inval
 
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, RouterLink],
   selector: 'app-verify-email',
   templateUrl: './verify-email.component.html',
   styleUrl: './verify-email.component.scss',

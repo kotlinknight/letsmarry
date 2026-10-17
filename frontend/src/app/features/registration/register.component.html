@@ -1,0 +1,200 @@
+<section class="login-page" aria-labelledby="register-title">
+  <div class="login-card">
+    <p class="wordmark" aria-label="Make My Marriage">mmm.</p>
+    <p class="eyebrow">Your planning space</p>
+    @if (state() === 'success') {
+      <h1 id="register-title" tabindex="-1">Check your email</h1>
+      <p class="notice" role="status">
+        Your account was created. Check your inbox for a verification link and verify your email
+        before signing in. In local development, email is delivered to Mailpit when the mail worker
+        is enabled. <a href="http://127.0.0.1:8025">Open Mailpit</a> at its default local address.
+      </p>
+      <p class="verification-help"><a routerLink="/login">Go to sign in</a></p>
+      <p class="verification-help">
+        Didn’t receive an email? <a routerLink="/verify-email">Request a new verification link</a>.
+      </p>
+    } @else if (state() === 'unavailable') {
+      <h1 id="register-title">Registration unavailable</h1>
+      <p class="notice error-notice" role="alert">
+        Account creation is not enabled in this environment. You can sign in with an existing
+        account.
+      </p>
+      <p class="verification-help"><a routerLink="/login">Go to sign in</a></p>
+    } @else {
+      <h1 id="register-title">Create your account</h1>
+      <p class="intro">Start with your details. Wedding setup comes later, after you sign in.</p>
+      @if (message()) {
+        <p id="register-feedback" class="notice error-notice" role="alert" tabindex="-1">
+          {{ message() }}
+        </p>
+        @if (duplicateEmail()) {
+          <p class="verification-help">
+            <a routerLink="/login">Sign in</a>,
+            <a routerLink="/verify-email">request a verification link</a>, or
+            <a routerLink="/forgot-password">recover your password</a>.
+          </p>
+        } @else if (uncertainOutcome()) {
+          <p class="verification-help">
+            <a routerLink="/verify-email">Request a verification link</a> before submitting again.
+          </p>
+        }
+      }
+
+      <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+        <div class="field">
+          <label for="register-name">Display name</label>
+          <input
+            id="register-name"
+            type="text"
+            autocomplete="name"
+            formControlName="displayName"
+            (blur)="normalizeDisplayName()"
+            [attr.aria-invalid]="
+              form.controls.displayName.touched && form.controls.displayName.invalid
+            "
+            [attr.aria-describedby]="
+              form.controls.displayName.touched && form.controls.displayName.invalid
+                ? 'register-name-error'
+                : null
+            "
+          />
+          @if (form.controls.displayName.touched && form.controls.displayName.invalid) {
+            <p id="register-name-error" class="field-error" role="alert">
+              @if (form.controls.displayName.hasError('server')) {
+                {{ form.controls.displayName.getError('server') }}
+              } @else if (form.controls.displayName.hasError('maxlength')) {
+                Use no more than 150 characters.
+              } @else {
+                Enter your display name.
+              }
+            </p>
+          }
+        </div>
+
+        <div class="field">
+          <label for="register-email">Email address</label>
+          <input
+            id="register-email"
+            type="email"
+            autocomplete="email"
+            formControlName="email"
+            (blur)="normalizeEmail()"
+            [attr.aria-invalid]="form.controls.email.touched && form.controls.email.invalid"
+            [attr.aria-describedby]="
+              form.controls.email.touched && form.controls.email.invalid
+                ? 'register-email-error'
+                : null
+            "
+          />
+          @if (form.controls.email.touched && form.controls.email.invalid) {
+            <p id="register-email-error" class="field-error" role="alert">
+              {{
+                form.controls.email.hasError('server')
+                  ? form.controls.email.getError('server')
+                  : 'Enter a valid email address of no more than 320 characters.'
+              }}
+            </p>
+          }
+        </div>
+
+        <div class="field">
+          <label for="register-password">Password</label>
+          <div class="password-field">
+            <input
+              id="register-password"
+              [type]="passwordVisible() ? 'text' : 'password'"
+              autocomplete="new-password"
+              formControlName="password"
+              [attr.aria-invalid]="form.controls.password.touched && form.controls.password.invalid"
+              [attr.aria-describedby]="
+                form.controls.password.touched && form.controls.password.invalid
+                  ? 'register-password-help register-password-error'
+                  : 'register-password-help'
+              "
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              [attr.aria-label]="passwordVisible() ? 'Hide password' : 'Show password'"
+              [attr.aria-pressed]="passwordVisible()"
+              (click)="togglePassword()"
+            >
+              {{ passwordVisible() ? 'Hide' : 'Show' }}
+            </button>
+          </div>
+          <p id="register-password-help" class="password-policy">
+            Use 15 to 128 characters. Control characters are not allowed.
+          </p>
+          @if (form.controls.password.touched && form.controls.password.invalid) {
+            <p id="register-password-error" class="field-error" role="alert">
+              {{
+                form.controls.password.hasError('server')
+                  ? form.controls.password.getError('server')
+                  : 'Use 15 to 128 characters without control characters.'
+              }}
+            </p>
+          }
+        </div>
+
+        <div class="field">
+          <label for="register-confirm-password">Confirm password</label>
+          <div class="password-field">
+            <input
+              id="register-confirm-password"
+              [type]="confirmationVisible() ? 'text' : 'password'"
+              autocomplete="new-password"
+              formControlName="confirmPassword"
+              [attr.aria-invalid]="
+                form.controls.confirmPassword.touched &&
+                (form.controls.confirmPassword.invalid || form.hasError('passwordMismatch'))
+              "
+              [attr.aria-describedby]="
+                form.controls.confirmPassword.touched &&
+                (form.controls.confirmPassword.invalid || form.hasError('passwordMismatch'))
+                  ? 'register-confirm-error'
+                  : null
+              "
+            />
+            <button
+              class="password-toggle"
+              type="button"
+              [attr.aria-label]="confirmationVisible() ? 'Hide confirmation' : 'Show confirmation'"
+              [attr.aria-pressed]="confirmationVisible()"
+              (click)="toggleConfirmation()"
+            >
+              {{ confirmationVisible() ? 'Hide' : 'Show' }}
+            </button>
+          </div>
+          @if (
+            form.controls.confirmPassword.touched &&
+            (form.controls.confirmPassword.invalid || form.hasError('passwordMismatch'))
+          ) {
+            <p id="register-confirm-error" class="field-error" role="alert">
+              {{
+                form.controls.confirmPassword.hasError('required')
+                  ? 'Confirm your password.'
+                  : 'Passwords must match.'
+              }}
+            </p>
+          }
+        </div>
+
+        <button
+          class="submit-button"
+          type="submit"
+          [disabled]="form.invalid || state() === 'submitting'"
+        >
+          {{ state() === 'submitting' ? 'Creating account…' : 'Create account' }}
+        </button>
+      </form>
+
+      <p class="verification-help">Already have an account? <a routerLink="/login">Sign in</a>.</p>
+    }
+  </div>
+
+  <aside class="editorial-panel" aria-label="Make My Marriage welcome">
+    <p class="editorial-mark">✦</p>
+    <h2>Weddings, but <span>make it yours.</span></h2>
+    <p>A brighter way to plan every little thing that makes your big day yours.</p>
+  </aside>
+</section>

@@ -1,26 +1,12 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import {
-  AbstractControl,
-  FormControl,
-  ReactiveFormsModule,
-  ValidationErrors,
-  Validators,
-} from '@angular/forms';
+import { FormControl, ReactiveFormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { normalizedEmail } from '../../shared/validation/account.validators';
 import { PasswordRecoveryApiService } from './password-recovery-api.service';
 
 type State = 'idle' | 'submitting' | 'accepted' | 'rate-limited' | 'csrf' | 'unavailable' | 'error';
-
-function normalizedEmail(control: AbstractControl): ValidationErrors | null {
-  const value = String(control.value ?? '')
-    .trim()
-    .toLowerCase();
-  if (!value) return { required: true };
-  const candidate = new FormControl(value);
-  return Validators.email(candidate) ?? Validators.maxLength(320)(candidate);
-}
 
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,

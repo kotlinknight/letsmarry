@@ -34,4 +34,12 @@ describe('application routes', () => {
       'Verify your email',
     );
   });
+
+  it('renders the registration route without submitting automatically', async () => {
+    const harness = await RouterTestingHarness.create('/register');
+    expect(harness.routeNativeElement?.querySelector('h1')?.textContent).toContain(
+      'Create your account',
+    );
+    expect(harness.routeNativeElement?.textContent).toContain('Create account');
+  });
 });

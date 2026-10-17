@@ -1,12 +1,13 @@
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { VerifyEmailComponent } from './verify-email.component';
 
 describe('VerifyEmailComponent', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     });
   });
 
@@ -33,7 +34,9 @@ describe('VerifyEmailComponent', () => {
     expect(verification.request.withCredentials).toBe(true);
     verification.flush(null, { status: 204, statusText: 'No Content' });
     await action;
+    fixture.detectChanges();
     expect(fixture.componentInstance.state()).toBe('success');
+    expect(fixture.nativeElement.querySelector('a[href="/login"]')).not.toBeNull();
   });
 
   it('requests a replacement with a generic success state', async () => {

@@ -21,6 +21,9 @@ import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { filter, firstValueFrom } from 'rxjs';
 import { PasswordRecoveryApiService } from './password-recovery-api.service';
 import { AuthService } from '../../core/auth/auth.service';
+import { passwordPolicy } from '../../shared/validation/account.validators';
+
+export { passwordPolicy } from '../../shared/validation/account.validators';
 
 type ResetState =
   | 'ready'
@@ -32,16 +35,6 @@ type ResetState =
   | 'rate-limited'
   | 'unavailable'
   | 'error';
-
-export const passwordPolicy: ValidatorFn = (control: AbstractControl): ValidationErrors | null => {
-  const value = control.value;
-  if (typeof value !== 'string') return { passwordPolicy: true };
-  const normalized = value.normalize('NFC');
-  const length = Array.from(normalized).length;
-  return length >= 15 && length <= 128 && !/[\p{Cc}]/u.test(normalized)
-    ? null
-    : { passwordPolicy: true };
-};
 
 const passwordsMatch: ValidatorFn = (control: AbstractControl): ValidationErrors | null => {
   const password = control.get('newPassword')?.value;

@@ -1,8 +1,8 @@
 # Make My Marriage — Development Plan
 
-**Status:** Milestones 0, 1A, 1B, and 1C have local checkpoints; Stages 1D-A/B/C are implemented locally and uncommitted
+**Status:** Milestones 0 and 1 are complete for local/test acceptance; the Stage 1E-A/B/C/D closure changes are uncommitted and unpushed
 
-**Last updated:** 2026-10-16
+**Last updated:** 2026-10-17
 
 ## 1. Delivery boundaries
 
@@ -126,7 +126,7 @@ Milestone 1 is delivered in separately approved stages: **1A** user registration
 
 Resolve each before its feature is implemented; none requires speculative business implementation in Milestone 0.
 
-- Accounts: session timeouts, account-security invalidation behavior, verification/reset lifetimes, and outbox retry/lease/encryption-key lifecycle details.
+- Accounts/release: Milestone 1 adopts a 30-minute inactivity timeout, durable `auth_version` invalidation, 24-hour verification links, 30-minute reset links, and the documented outbox retry/lease behavior. Production still needs the public-signup enumeration decision, secret-store/key-rotation procedure, provider retention/deduplication review, trusted proxy/origin configuration, and operational recovery policy.
 - Membership: default permissions, override precedence, protected owner capabilities, recovery/transfer, suspended-owner slot protection, and setup-admin privileges after owners join.
 - Tasks: visibility for owners/admins/creators/assignees on selected-member tasks.
 - Guests: live versus frozen invitation eligibility, expiry, immediate guest-access revocation, response cutoff, and unique-person versus event-invitation totals.
@@ -250,7 +250,7 @@ The opt-in [real-service browser journey](implementation/milestone-1c-d-authenti
 
 After a scope and credential-file review, completed 1C changes were saved in local checkpoint `6c92a74` with explicit user authorization. Stage 1D-A adds additive V5 schema for hash-only `password_reset_tokens` and nonnegative `users.auth_version` defaulting to zero for retained accounts. The identity module supplies 30-minute random token issuance, replacement, revocation, and single-use consumption under a consistent user-row-first lock order. Consumption requires an outer transaction so a later reset command can atomically update the password hash, consume the token, and advance the durable session version. See [ADR-015](adr/ADR-015-password-recovery-tokens.md) and the [implementation note](implementation/milestone-1d-a-password-reset-tokens.md).
 
-Stage 1D-A adds no recovery endpoint, email template, password mutation, Redis repository change, session-version enforcement, Angular page, or registration UI. Existing sessions continue under 1C rules until 1D-C adds version capture and validation; legacy versionless sessions must reauthenticate at that transition. The registration gate remains independent of future recovery configuration. Stage 1D-A changes remain uncommitted and unpushed.
+Stage 1D-A adds no recovery endpoint, email template, password mutation, Redis repository change, session-version enforcement, Angular page, or registration UI. Existing sessions continue under 1C rules until 1D-C adds version capture and validation; legacy versionless sessions must reauthenticate at that transition. The registration gate remains independent of future recovery configuration. At the 1D-A handoff these changes were uncommitted. The complete 1D work was later saved in local checkpoint `bcb7730` with explicit authorization; it has not been pushed.
 
 Verification: the locked offline Gradle build, Spotless, and all 92 tests passed after Docker Desktop became available. PostgreSQL Testcontainers proved the fresh V5 schema, Hibernate validation, preserved V4 data on upgrade, database constraints, and concurrent token behavior. Spring Modulith and existing security regression tests passed. No developer database was reset or modified.
 
@@ -265,3 +265,23 @@ The gated reset API consumes a single-use token and atomically updates the norma
 ## 23. Stage 1D-D Angular password recovery and integration
 
 The approved frontend stage adds standalone `/forgot-password` and `/reset-password` routes, a login-page link, shared Figma semantic styling, reactive validation, safe status messages, and same-origin CSRF-protected calls to the existing recovery APIs. Reset links are fragment-based and are scrubbed on initial load and subsequent same-route navigation; secrets remain in memory only. Successful reset clears the cached Angular account without logging the user in. The existing `/users/me` guard and account refresh enforce revocation in the UI. Controlled Chromium fixtures and an opt-in isolated real-service journey cover the frontend and backend together. See the [implementation note](implementation/milestone-1d-d-angular-password-recovery.md). Angular registration, public signup, production email, and wedding features remain deferred to separately approved work.
+
+## 24. Stage 1E-A Angular registration form
+
+The separately approved Stage 1E-A adds a lazy `/register` route and a responsive standalone Reactive Form. It reuses the seven-page Figma file's semantic Light/Dark tokens, input/button patterns, Inter typography, and the existing account-page layout. Display name and email are trimmed, email is lowercased, the shared password validator applies the 15–128 NFC-normalized Unicode-code-point policy without trimming, and confirmation compares normalized passwords. Accessible labels, inline errors, keyboard focus, visibility controls, and mobile styling are part of this stage. The temporary **Check details** action makes no API call and explicitly says no account was created. Stage 1E-B owns the CSRF-backed registration request, real success/errors, and navigation from sign-in; public signup and wedding onboarding remain disabled. See the [1E-A implementation note](implementation/milestone-1e-a-registration-ui.md).
+
+## 25. Stage 1E-B registration integration and account navigation
+
+The separately approved Stage 1E-B replaces the temporary form action with a same-origin CSRF-protected registration request. It sends only display name, normalized email, and password with the browser-managed anonymous session cookie. A confirmed `201` clears password controls and displays verification guidance; no authenticated session or wedding is created. Problem Details field errors and the existing duplicate-email, CSRF, unavailable, rate-limit, and uncertain-outcome states receive distinct feedback. Sign-in links to registration, and successful verification links to sign-in. Backend local/test gates and the existing OpenAPI contract remain unchanged. See the [1E-B integration note](implementation/milestone-1e-b-registration-integration.md). The complete real-service acceptance journey remains Stage 1E-C.
+
+## 26. Stage 1E-C complete account lifecycle acceptance
+
+The opt-in [Stage 1E-C browser journey](implementation/milestone-1e-c-account-acceptance.md) begins at the real Angular `/register` form and completes Mailpit verification, Redis-backed login and reload restoration, password recovery in a separate browser context, global old-session revocation, old/new password checks, password-changed notification, new-session logout, former-cookie replay rejection, and protected-route redirection. It uses isolated PostgreSQL, Redis, and Mailpit services and no mocked backend endpoint. The combined 17-journey Playwright suite passed twice against the same isolated stack; the backend's 116 tests and all 67 Angular unit tests also passed. No backend behavior, API contract, migration, security rule, public-signup gate, commit, or push was changed.
+
+## 27. Stage 1E-D documentation, security review, and Milestone 1 closure
+
+The [Milestone 1 final acceptance record](implementation/milestone-1-final-acceptance.md) reconciles the implemented account lifecycle, architecture, API/routes, V1–V5 migrations, Redis sessions, encrypted outbox, security controls, local instructions, limitations, production gaps, and Milestone 2 handoff. Current-status READMEs and checklists were corrected without rewriting the point-in-time history in earlier implementation notes. Registration, verification, delivery, and recovery remain guarded local/test capabilities; no public signup, production provider, wedding behavior, deployment, commit, or push was added.
+
+Stage 1E-D reran the full locked backend build and Spotless check: all 116 JUnit tests in 33 suites passed with no failures, errors, or skips. The Angular production build, all 67 tests in 11 files, ESLint, and Prettier passed. The normal Chromium suite passed 13 fixture journeys and skipped the four opt-in live journeys as designed. The combined isolated real-service suite then passed all 17 journeys in one worker. OpenAPI parsed with all 86 local references resolved, local Markdown links resolved, and `git diff --check` passed. A focused secret scan found only documented local examples and explicit test fixtures, not real credentials. The isolated service containers were stopped afterward and their named volumes were preserved.
+
+**Milestone 1 verdict:** accepted for local/test development. Production rollout remains blocked on the public-signup, deployment, provider, secret-management, monitoring, accessibility/browser, and operational controls recorded in the final acceptance document. Milestone 2 may be planned from the approved account/current-user contracts, but implementation requires separate authorization and must not make registration create a wedding implicitly.

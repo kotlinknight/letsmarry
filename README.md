@@ -4,17 +4,17 @@ Make My Marriage is a wedding-planning SaaS for Indian weddings. Couples and tru
 
 ## Current status
 
-**Milestone 0 complete.** The repository contains the Spring Boot foundation, Angular design foundation, local PostgreSQL/Redis/Mailpit services, production-style application images, automated tests, and a GitHub Actions CI workflow.
+**Milestones 0 and 1 are complete for local/test use.** The repository contains the Spring Boot and Angular foundations plus registration, email verification, Redis-session login/logout, current-account restoration, password recovery, encrypted transactional email delivery through Mailpit, and complete real-service account-lifecycle acceptance coverage.
 
-Development proceeds through separately approved milestones. The next planned milestone is **Milestone 1: accounts**, which still requires explicit approval. Registration, login, wedding creation, and other business features have not been implemented.
+Public signup and password recovery remain disabled outside the guarded local/test configuration. Production email/provider configuration and the wider production-readiness work listed in the [Milestone 1 final acceptance record](docs/implementation/milestone-1-final-acceptance.md) are still required before launch. Wedding creation and other wedding-planning business features have not been implemented; they require separate Milestone 2 approval.
 
 ## Repository layout
 
 | Directory | Purpose | Implementation stage |
 |---|---|---|
-| [backend](backend/README.md) | One Java/Spring Boot application with Spring Modulith business boundaries | 0B |
-| [frontend](frontend/README.md) | Angular application shell using the reviewed Figma design system | 0C |
-| [infrastructure](infrastructure/README.md) | Local development services and the optional complete application profile | 0B / 0D |
+| [backend](backend/README.md) | One Java/Spring Boot application with the implemented account lifecycle and Spring Modulith boundaries | Milestone 1 |
+| [frontend](frontend/README.md) | Angular application shell and account UI using the reviewed Figma design system | Milestone 1 |
+| [infrastructure](infrastructure/README.md) | Local PostgreSQL, Redis, Mailpit, and the optional complete application profile | 0B / 0D / Milestone 1 local acceptance |
 | [docs](docs/05-development-plan.md) | Product baseline, architecture, database/API designs, delivery plan, and decisions | Maintained throughout |
 | [.github](.github/README.md) | GitHub Actions CI configuration | 0D |
 
@@ -43,6 +43,7 @@ Recorded decisions:
 - [ADR-007: Redis-backed planner sessions](docs/adr/ADR-007-redis-sessions.md)
 - [ADR-009: Transactional email outbox](docs/adr/ADR-009-email-outbox.md)
 - [ADR-014: Wedding and membership module boundary](docs/adr/ADR-014-wedding-membership.md)
+- [ADR-015: Password-recovery token lifecycle](docs/adr/ADR-015-password-recovery-tokens.md)
 
 ## Local development
 

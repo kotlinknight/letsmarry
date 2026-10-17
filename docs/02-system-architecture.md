@@ -501,7 +501,7 @@ Later: OpenTelemetry distributed context, Prometheus collection, Grafana dashboa
 | [ADR-007](adr/ADR-007-redis-sessions.md) | Spring Session + Redis with HttpOnly cookie and CSRF | Accepted; replaces provisional planner JWT/refresh |
 | ADR-008 | Private object storage with short-lived signed URLs | Accepted |
 | [ADR-009](adr/ADR-009-email-outbox.md) | Provider-neutral email + one PostgreSQL transactional outbox | Accepted |
-| [ADR-015](adr/ADR-015-password-recovery-tokens.md) | Separate reset-token lifecycle and staged session-version enforcement | Accepted for 1D-A foundation |
+| [ADR-015](adr/ADR-015-password-recovery-tokens.md) | Separate reset-token lifecycle and durable session-version enforcement | Accepted; implemented locally through 1D-D |
 | ADR-010 | Docker Compose local + GitHub Actions CI | Accepted |
 | ADR-011 | Cloud host and India region | Deferred |
 | ADR-012 | Kubernetes/AKS and Infrastructure as Code | Deferred |
@@ -521,9 +521,9 @@ Later: OpenTelemetry distributed context, Prometheus collection, Grafana dashboa
 
 ## 20. Open engineering questions
 
-- Exact session timeouts, account-security invalidation behavior, and Redis transient-idempotency TTLs/atomic operations.
+- Production account rollout policy: public-signup enumeration response, trusted proxy/origin configuration, secret/key rotation, operational recovery, and any Redis transient-idempotency TTLs added by future features. Milestone 1 adopts a 30-minute inactivity timeout and durable `auth_version` session invalidation.
 - Owner recovery/transfer and creator privileges after both owners join.
-- Outbox worker lease/retry details, delivery deduplication, encryption-key lifecycle, and payload retention within the accepted single-pipeline design.
+- Production outbox operations: provider-level deduplication, secret-store/key-rotation procedure, monitoring, and retention evidence. Milestone 1 fixes the local/test lease/retry behavior and purges terminal ciphertext within the accepted single-pipeline design.
 - Guest token lifetime, revocation and changing RSVPs after cutoff.
 - Private task visibility rules for admin/owner, assignment and task creation.
 - Refund/overpayment representation, expense cancellation, exchange-rate policy (MVP likely INR-only).

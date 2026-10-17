@@ -43,6 +43,14 @@ export const routes: Routes = [
           import('./features/auth/login.component').then((module) => module.LoginComponent),
       },
       {
+        path: 'register',
+        title: 'Create account | Make My Marriage',
+        loadComponent: () =>
+          import('./features/registration/register.component').then(
+            (module) => module.RegisterComponent,
+          ),
+      },
+      {
         path: 'forgot-password',
         title: 'Forgot password | Make My Marriage',
         loadComponent: () =>

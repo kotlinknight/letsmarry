@@ -34,8 +34,11 @@ test('mobile shell exposes keyboard and drawer navigation', async ({ page }) => 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/foundation');
 
+  await expect(page.getByRole('heading', { name: 'Weddings, but make it yours.' })).toBeVisible();
+  const skipLink = page.getByRole('link', { name: 'Skip to main content' });
+  await expect(skipLink).toBeAttached();
   await page.locator('body').press('Tab');
-  await expect(page.getByRole('link', { name: 'Skip to main content' })).toBeFocused();
+  await expect(skipLink).toBeFocused();
 
   const menuButton = page.getByRole('button', { name: 'Open navigation' });
   await page.keyboard.press('Tab');

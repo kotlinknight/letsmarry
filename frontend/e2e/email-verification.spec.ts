@@ -29,4 +29,6 @@ test('verification waits for a click and removes the token fragment', async ({ p
   await page.getByRole('button', { name: 'Verify email' }).click();
   await expect(page.getByRole('status')).toContainText('Your email address is verified.');
   expect(verificationRequests).toBe(1);
+  await page.getByRole('link', { name: 'Go to sign in' }).click();
+  await expect(page).toHaveURL(/\/login$/);
 });
